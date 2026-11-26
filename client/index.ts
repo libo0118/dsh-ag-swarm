@@ -6,6 +6,7 @@ import { swarmClientStore, type LegacyApiLike, type RemoteLike } from './store'
 import { SwarmWorkspace } from './components/SwarmWorkspace'
 import { HeaderWidget } from './components/HeaderWidget'
 import { ToolCard } from './components/ToolCard'
+import { WaitToolCard } from './components/WaitToolCard'
 import { SettingsSection } from './components/SettingsSection'
 
 interface HostLocaleLike {
@@ -103,6 +104,27 @@ export function apply(ctx: ClientContext): (() => void) | void {
     ctx.slots.register(
       { name: 'tool.call.toolview', key: 'swarm' } as never,
       ToolCard as never,
+    ),
+  )
+
+  ctx.slots.inject('tool.call.toolview' as never, () =>
+    ctx.slots.register(
+      { name: 'tool.call.toolview', key: 'ag_swarm' } as never,
+      ToolCard as never,
+    ),
+  )
+
+  ctx.slots.inject('tool.call.toolview' as never, () =>
+    ctx.slots.register(
+      { name: 'tool.call.toolview', key: 'swarm_wait' } as never,
+      WaitToolCard as never,
+    ),
+  )
+
+  ctx.slots.inject('tool.call.toolview' as never, () =>
+    ctx.slots.register(
+      { name: 'tool.call.toolview', key: 'ag_swarm_wait' } as never,
+      WaitToolCard as never,
     ),
   )
 

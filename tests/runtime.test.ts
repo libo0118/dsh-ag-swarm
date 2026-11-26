@@ -1183,6 +1183,24 @@ describe('/swarm primary command, WorkerPool presets & /api/model-presets routes
     expect(JSON.parse(stopRes.chunks.join('')).stopped).toEqual(['runner-1'])
     expect(store.getSwarm(swarm.swarm_id)!.members['runner-1']!.state).toBe('waiting')
 
+    // 4) v0.1.5: coordinator waitForBoard heartbeat timeout returns worker_summary & tool timeoutMs is bounded
+    store.updateMember(swarm.swarm_id, 'runner-1', { state: 'working', steps_count: 12, activity: 'Step #12 · ops_bash' })
+    const hbRes = await pool.waitForBoard({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      since: store.getSwarm(swarm.swarm_id)!.head,
+      timeout_ms: 1_000,
+      agent: coord,
+    })
+    expect(hbRes.status).toBe('timeout')
+    expect(hbRes.reason).toBe('heartbeat')
+    expect(hbRes.timedOut).toBe(true)
+    expect(hbRes.worker_summary?.[0]).toMatchObject({ name: 'runner-1', state: 'working', steps_count: 12 })
+
+    const toolsH = registerSwarmTools(ctx, store, pool)
+    expect(ctx.registeredTools.get(toolsH.registeredNames.swarm_wait)?.timeoutMs).toBe(360_000)
+    toolsH.dispose()
+
     disposeRoutes()
     await pool.dispose()
   })

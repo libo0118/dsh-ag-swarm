@@ -71,6 +71,13 @@ export interface WaitBoardResult {
   wake_mode?: 'mentions' | 'anything'
   since?: number
   note?: string
+  worker_summary?: Array<{
+    name: string
+    state: MemberRecord['state']
+    steps_count?: number
+    activity?: string
+    last_post_seq?: number
+  }>
 }
 
 export interface SwitchModelInput {
@@ -108,9 +115,9 @@ interface PendingWakeup {
   text: string
 }
 
-const DEFAULT_COORDINATOR_WAIT_MS = 600_000
+const DEFAULT_COORDINATOR_WAIT_MS = 150_000
 const MIN_COORDINATOR_WAIT_MS = 1_000
-const MAX_COORDINATOR_WAIT_MS = 3_600_000
+const MAX_COORDINATOR_WAIT_MS = 300_000
 
 function clampWaitMs(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return DEFAULT_COORDINATOR_WAIT_MS
@@ -1213,12 +1220,26 @@ export class WorkerPool {
       this.lifetime.signal.addEventListener('abort', onUnload, { once: true })
 
       timer = setTimeout(() => {
+        const latest = this.store.getSwarm(input.swarmId)
+        const workerSummary = latest
+          ? Object.values(latest.members)
+              .filter((m) => m.role !== 'coordinator' && m.role !== 'monitor' && !isKilled(m))
+              .map((m) => ({
+                name: m.name,
+                state: m.state,
+                ...(m.steps_count !== undefined ? { steps_count: m.steps_count } : {}),
+                ...(m.activity ? { activity: m.activity } : {}),
+                ...(m.last_post_seq !== undefined ? { last_post_seq: m.last_post_seq } : {}),
+              }))
+          : []
         finish(() =>
           resolve({
             status: 'timeout',
-            reason: 'timeout',
-            head: currentHead(),
+            reason: 'heartbeat',
+            head: latest?.head ?? currentHead(),
             timedOut: true,
+            worker_summary: workerSummary,
+            note: 'Heartbeat checkpoint: write a concise 1-2 line progress update for the user based on worker_summary, then immediately call swarm_wait again while workers are still running.',
           }),
         )
       }, timeoutMs)
@@ -1660,7 +1681,7 @@ export class WorkerPool {
       '1. Split the goal into independent parallel tracks with disjoint file/module ownership.',
       '2. Call `swarm{action:"add", name, brief, role_preset, workspace}` in parallel to spawn workers (use `workspace:"share"` for concurrent file editors, `role_preset` like `"explorer"` / `"author"` / `"verifier"`, and instruct every worker to report back with `@coordinator [done] ...`).',
       '3. Call `swarm{action:"plan", goal:{title,line}, plan_tasks:{...}, threads:[...]}` so the Overview tab renders live progress.',
-      `4. IMMEDIATELY loop calling \`${waitTool}{since: <head>}\` after dispatching workers — it blocks with zero LLM token burn while keeping this main DSH session marked as working in the sidebar until workers report back or the user steers.`,
+      `4. IMMEDIATELY loop calling \`${waitTool}{since: <head>}\` after dispatching workers — it suspends with zero LLM token burn (~2.5m heartbeat checkpoint) while an embedded UI card displays live worker steps; when a heartbeat returns (\`reason: "heartbeat"\`), share a concise 1-2 line progress update and immediately re-enter \`${waitTool}\`.`,
       '5. Review results, integrate changes, run final verification, and post `[done] <summary>` (without `@`) via `post_message` before replying to the user.',
     ].join('\n')
 

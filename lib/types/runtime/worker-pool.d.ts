@@ -35,6 +35,13 @@ export interface WaitBoardResult {
     wake_mode?: 'mentions' | 'anything';
     since?: number;
     note?: string;
+    worker_summary?: Array<{
+        name: string;
+        state: MemberRecord['state'];
+        steps_count?: number;
+        activity?: string;
+        last_post_seq?: number;
+    }>;
 }
 export interface SwitchModelInput {
     swarmId: string;
