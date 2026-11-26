@@ -111,6 +111,7 @@ export function ToolCard(props: ToolCardProps): JSX.Element {
   const locale = useUiLocale()
   const isZh = locale === 'zh-CN'
   const [expanded, setExpanded] = useState(false)
+  const [showFullDetails, setShowFullDetails] = useState(false)
   const input = extractInput(props)
   const outputText = extractOutputText(props)
   const status = resolveStatus(props)
@@ -232,23 +233,49 @@ export function ToolCard(props: ToolCardProps): JSX.Element {
           >
             {expanded ? t('tool.hideDetails') : t('tool.showDetails')}
           </button>
-          {expanded && (
-            <pre
-              style={{
-                marginTop: 4,
-                maxHeight: 220,
-                overflow: 'auto',
-                padding: '6px 8px',
-                borderRadius: 6,
-                background: 'var(--ag-fill, rgba(128,128,128,0.08))',
-                fontSize: 11,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-              }}
-            >
-              {outputText || JSON.stringify(input, null, 2)}
-            </pre>
-          )}
+          {expanded && (() => {
+            let formatted = outputText || JSON.stringify(input, null, 2)
+            if (outputText) {
+              try {
+                const parsedOut: unknown = JSON.parse(outputText)
+                if (parsedOut && typeof parsedOut === 'object') formatted = JSON.stringify(parsedOut, null, 2)
+              } catch { /* plain text */ }
+            }
+            const MAX_DETAIL = 3000
+            const truncated = !showFullDetails && formatted.length > MAX_DETAIL
+            const shownText = truncated ? `${formatted.slice(0, MAX_DETAIL)}…` : formatted
+            return (
+              <div>
+                <pre
+                  style={{
+                    marginTop: 4,
+                    maxHeight: 240,
+                    overflow: 'auto',
+                    padding: '6px 8px',
+                    borderRadius: 6,
+                    background: 'var(--ag-fill, rgba(128,128,128,0.08))',
+                    fontSize: 11,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {shownText}
+                </pre>
+                {(truncated || showFullDetails) && (
+                  <button
+                    type="button"
+                    className="ag-ghost-btn"
+                    onClick={() => setShowFullDetails((v) => !v)}
+                    style={{ marginTop: 4, height: 20, padding: '0 4px', fontSize: 11 }}
+                  >
+                    {showFullDetails
+                      ? t('common.showLess')
+                      : (isZh ? `显示全部 (共 ${formatted.length} 字符)` : `Show full (${formatted.length} chars)`)}
+                  </button>
+                )}
+              </div>
+            )
+          })()}
         </div>
       )}
     </div>

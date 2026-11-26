@@ -18,11 +18,47 @@ interface WaitToolCardProps {
   }
 }
 
+interface ParsedWaitMessage {
+  seq?: number
+  agent?: string
+  channel?: string
+  text?: string
+  time?: string
+}
+
+interface ParsedWorkerSummary {
+  name?: string
+  state?: string
+  steps_count?: number
+  activity?: string
+  last_post_seq?: number
+}
+
 interface ParsedWaitOutput {
   status?: string
   reason?: string
-  messages?: unknown[]
+  head?: number
+  messages?: ParsedWaitMessage[]
+  worker_summary?: ParsedWorkerSummary[]
+  note?: string
   timedOut?: boolean
+}
+
+const MAX_MSG_PREVIEW = 320
+const MAX_RAW_PREVIEW = 3000
+
+function truncateText(text: string, maxChars: number): { text: string; truncated: boolean } {
+  if (text.length <= maxChars) return { text, truncated: false }
+  return { text: `${text.slice(0, maxChars)}…`, truncated: true }
+}
+
+function formatPrettyJson(raw: string, parsed: unknown): string {
+  if (parsed && typeof parsed === 'object') {
+    try {
+      return JSON.stringify(parsed, null, 2)
+    } catch { /* fallback */ }
+  }
+  return raw
 }
 
 function resolveStatus(props: WaitToolCardProps): 'running' | 'ok' | 'error' {
@@ -86,6 +122,9 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
   const locale = useUiLocale()
   const isZh = locale === 'zh-CN'
   const [expanded, setExpanded] = useState(false)
+  const [showRawJson, setShowRawJson] = useState(false)
+  const [showFullRaw, setShowFullRaw] = useState(false)
+  const [expandedMsgs, setExpandedMsgs] = useState<Record<number, boolean>>({})
   const [stopping, setStopping] = useState(false)
   const { snapshot, postAction } = useSwarmStore()
 
@@ -96,6 +135,21 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
   if (status !== 'running') {
     const label = finishedSummaryLabel(parsed, status === 'error', isZh)
     const color = status === 'error' ? 'var(--ag-error, #cb3d3d)' : 'var(--ag-success, #63984f)'
+    const msgs = Array.isArray(parsed?.messages) ? parsed!.messages! : []
+    const workers = Array.isArray(parsed?.worker_summary) ? parsed!.worker_summary! : []
+    const prettyRaw = outputText ? formatPrettyJson(outputText, parsed) : ''
+    const rawPreview = showFullRaw ? { text: prettyRaw, truncated: false } : truncateText(prettyRaw, MAX_RAW_PREVIEW)
+    const compactLine = msgs.length > 0
+      ? `#${msgs[0]?.seq ?? '?'} @${msgs[0]?.agent ?? 'worker'}: ${truncateText(String(msgs[0]?.text ?? '').replace(/\s+/g, ' '), 100).text}`
+      : workers.length > 0
+        ? (() => {
+            const active = workers.filter((w) => w.state === 'working')
+            return active.length > 0
+              ? `${active.length} ${isZh ? '工作中' : 'working'} · ${active.slice(0, 2).map((w) => `@${w.name} ${w.activity || ''}`.trim()).join(' | ')}`
+              : `${workers.length} ${isZh ? '成员待命' : 'workers idle'}`
+          })()
+        : parsed?.note || ''
+
     return (
       <div
         className="ag-toolcard"
@@ -115,12 +169,89 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
             {status === 'error' ? (isZh ? '已中断' : 'Stopped') : (isZh ? '已完成' : 'Done')}
           </span>
         </div>
+        {!expanded && compactLine && (
+          <div
+            style={{
+              marginTop: 4,
+              color: 'var(--ag-fg-muted, #5d676f)',
+              fontSize: 11.5,
+              lineHeight: '18px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={compactLine}
+          >
+            {compactLine}
+          </div>
+        )}
         {outputText && (
           <div style={{ marginTop: 4 }}>
             <button type="button" className="ag-ghost-btn" onClick={() => setExpanded((v) => !v)} style={{ height: 22, fontSize: 11, padding: '0 4px' }}>
               {expanded ? t('tool.hideDetails') : t('tool.showDetails')}
             </button>
-            {expanded && <pre style={{ marginTop: 6, maxHeight: 180, overflow: 'auto', fontSize: 11 }}>{outputText}</pre>}
+            {expanded && (
+              <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
+                {workers.length > 0 && workers.map((w, i) => (
+                  <div key={`${w.name ?? i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderRadius: 6, background: 'var(--ag-fill, rgba(128,128,128,0.06))' }}>
+                    <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>@{w.name}</span>
+                    <span style={{ fontSize: 11, color: w.state === 'working' ? 'var(--ag-primary, #007acc)' : 'var(--ag-fg-muted, #5d676f)', whiteSpace: 'nowrap' }}>
+                      {w.state === 'working' ? (isZh ? '工作中' : 'Working') : (w.state || '')}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ag-fg-muted, #5d676f)' }}>
+                      {w.activity || '—'}
+                    </span>
+                    {typeof w.steps_count === 'number' && w.steps_count > 0 && (
+                      <span style={{ fontFamily: 'var(--ag-mono, monospace)', fontSize: 11, color: 'var(--ag-fg-faint, #9da5ab)' }}>
+                        {isZh ? `${w.steps_count} 步` : `${w.steps_count}s`}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {msgs.length > 0 && msgs.map((m, idx) => {
+                  const rawMsg = String(m.text ?? '')
+                  const isMsgOpen = Boolean(expandedMsgs[idx])
+                  const preview = isMsgOpen ? { text: rawMsg, truncated: false } : truncateText(rawMsg, MAX_MSG_PREVIEW)
+                  return (
+                    <div key={`${m.seq ?? idx}`} style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--ag-fill, rgba(128,128,128,0.06))', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ag-fg-muted, #5d676f)' }}>
+                        <strong style={{ color: 'var(--ag-fg, inherit)' }}>@{m.agent || 'worker'}</strong>
+                        <span style={{ fontFamily: 'var(--ag-mono, monospace)' }}>#{m.seq ?? '?'}</span>
+                        {m.channel && m.channel !== 'main' && <span>#{m.channel}</span>}
+                      </div>
+                      <div style={{ fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{preview.text}</div>
+                      {(preview.truncated || isMsgOpen) && (
+                        <button type="button" className="ag-ghost-btn" onClick={() => setExpandedMsgs((p) => ({ ...p, [idx]: !isMsgOpen }))} style={{ alignSelf: 'flex-start', height: 20, padding: '0 4px', fontSize: 11 }}>
+                          {isMsgOpen ? (isZh ? '收起' : 'Show less') : (isZh ? `展开全文 (共 ${rawMsg.length} 字)` : `Show full (${rawMsg.length} chars)`)}
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+                {workers.length === 0 && msgs.length === 0 && (
+                  <div style={{ padding: '6px 8px', borderRadius: 6, background: 'var(--ag-fill, rgba(128,128,128,0.06))', fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {parsed?.note || (status === 'error' ? outputText : label)}
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button type="button" className="ag-ghost-btn" onClick={() => setShowRawJson((v) => !v)} style={{ height: 20, padding: '0 4px', fontSize: 11 }}>
+                    {showRawJson ? (isZh ? '隐藏原始 JSON' : 'Hide raw JSON') : (isZh ? '原始 JSON' : 'Raw JSON')}
+                  </button>
+                </div>
+                {showRawJson && (
+                  <div>
+                    <pre style={{ margin: 0, maxHeight: 200, overflow: 'auto', padding: '6px 8px', borderRadius: 6, background: 'var(--ag-fill, rgba(128,128,128,0.08))', fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {rawPreview.text}
+                    </pre>
+                    {(rawPreview.truncated || showFullRaw) && (
+                      <button type="button" className="ag-ghost-btn" onClick={() => setShowFullRaw((v) => !v)} style={{ marginTop: 4, height: 20, padding: '0 4px', fontSize: 11 }}>
+                        {showFullRaw ? (isZh ? '收起预览' : 'Collapse') : (isZh ? `显示全部 (共 ${prettyRaw.length} 字符)` : `Show full (${prettyRaw.length} chars)`)}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

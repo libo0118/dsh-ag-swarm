@@ -5,7 +5,7 @@ import type { SwarmConfig } from './shared/protocol.js'
 
 export type { SwarmConfig }
 
-export const PLUGIN_VERSION = '0.1.6'
+export const PLUGIN_VERSION = '0.1.7'
 
 export function defaultStorageDir(): string {
   const home = process.env.DSH_HOME && process.env.DSH_HOME.trim().length > 0
