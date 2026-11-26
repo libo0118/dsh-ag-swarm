@@ -1,75 +1,127 @@
 # dsh-ag-swarm
 
-Antigravity-style multi-agent Swarm plugin for **DeepSeek Harness (DSH `0.2.2-rc.3+`)** — reproducing Antigravity's **persistent parallel multi-agent collaboration**, **shared channel blackboard & `@mention` doorbell wakeups**, **Git worktree isolation**, **Stall Monitor**, **DSH sidebar main-session running-state keepalive**, and the full **5-Tab Hive & Board Web UI**.
+**简体中文** | [English](./README.en.md)
+
+[![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.2--rc.3-007acc?style=flat-square)](https://github.com/libo0118/dsh-ag-swarm)
+[![Version](https://img.shields.io/badge/version-v0.1.10-2ea44f?style=flat-square)](https://github.com/libo0118/dsh-ag-swarm/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./package.json)
+
+面向 **DeepSeek Harness（DSH `0.2.2-rc.3+`）** 的 Antigravity 风格多智能体蜂群（Swarm）插件——在 DSH 中完整复刻并增强 **持久化并发多子代理协作**、**共享频道黑板与 `@提及` 门铃唤醒**、**Git Worktree 隔离**、**DSH 预设与权限继承**、**模型热刷新**、**单点/全局停止**、**卡顿巡检** 以及包含 **6 标签页像素蜜蜂看板与对话内嵌卡片** 的全套中文 Web UI。
 
 ---
 
-## Why `dsh-ag-swarm`? (Architecture & Comparison)
+## 核心特性一览
 
-| Capability | `linkbag/dsh-swarm-orchestrator` | `zhairy/dsh-agent-swarm` | Antigravity Native Swarm | **`dsh-ag-swarm` (This Plugin)** |
+- **持久化并发 Worker 池**：优先通过宿主 `ctx.agents.create / resume` 创建与冷恢复子代理（失败自动回退 `subagents.startActivation`），完整支持 `working / waiting / stopped / killed` 生命周期与零成本休眠再唤醒。
+- **共享黑板与门铃唤醒**：支持 `@name` 定向通知、`@all` 广播、`@#channel` 频道订阅投递，以及基于已有成员历史事件上下文分叉（`fork`）。
+- **完整预设与权限继承（macOS / Linux / Windows 通用）**：在子代理 `setup` 钩子内对齐 DSH `agentPresets.composeFrom / mount`、`workingDirectory.set` 与父会话委托权限策略，确保 `standard`、`ops-ptc` 等任意模式下子代理均拥有完整工具链。
+- **主会话侧边栏持续保活 + 对话内嵌进度卡片**：`coordinator` 调用 `swarm_wait` 期间以 **0 LLM Token 消耗** 挂起等待，约每 2.5 分钟返回心跳检查点汇报进度；聊天流中通过 `WaitToolCard` 实时渲染各工作中子代理的当前步骤、停顿/恢复状态及快捷停止按钮。
+- **实时模型热刷新与角色模型预设**：监听 DSH `llm/adapters-updated` 事件并支持手动刷新，在插件设置或弹窗内修改模型、思考强度即可即时生效，无需重启 DSH。
+- **独立 Worktree / 分支隔离**：原生支持 `inherit`（共享目录）、`share`（Git worktree 并行隔离）、`branch`（本地独立 clone）三种工作区模式，并在终止成员时自动回收临时 worktree。
+
+---
+
+## 协作架构与运行流程
+
+```mermaid
+flowchart LR
+  U[用户 /swarm 目标] --> C[Coordinator 协调者]
+  C -->|swarm add 并发派发| B[(共享黑板 board.jsonl<br/>& 状态存储)]
+  B -->|@name / @#channel / @all 门铃唤醒| W1[Worker 1<br/>worktree: share]
+  B -->|@name 门铃唤醒| W2[Worker 2<br/>worktree: share]
+  C -->|swarm_wait 零Token挂起<br/>2.5m 心跳检查点| B
+  W1 -->|post_message @coordinator / @peer| B
+  W2 -->|post_message @coordinator / @peer| B
+  M[Stall Monitor 卡顿巡检] -.->|空闲告警 / 恢复后自动消退| B
+  B -->|SSE /ag-swarm/api/events 实时推送| UI[6-Tab Web UI & 对话 WaitToolCard]
+```
+
+---
+
+## 界面图文介绍
+
+### 1. 总览面板（Overview）
+直观呈现蜂群总目标、整体完成进度条、各工作流分组状态、以及像素蜜蜂团队阵列；出现异常或长时间无进展时高亮提示，恢复推进后横幅自动消退。
+
+![总览面板](./docs/images/overview.png)
+
+### 2. 子代理双栏视图与单点停止（Subagents）
+对齐 Antigravity 子代理交互体验：右侧实时区分「工作中」与「已完成 / 待命」列表，每个运行中的子代理均配有独立圆形 **停止** 按钮（仅暂停当前轮次，保留历史上下文与 worktree，随时可通过 `@提及` 唤醒继续）；左侧实时展示执行流并支持下方直接唤醒追问或切换全屏。
+
+![子代理双栏视图](./docs/images/subagents.png)
+
+### 3. 对话内嵌工具与等待卡片（`WaitToolCard` / `ToolCard`）
+主对话调用 `swarm_wait` 后不会变成“黑箱”：内嵌卡片实时展示当前工作中子代理的实时步数、正在调用的工具、单点停止按钮与「停止全部」入口；收到黑板汇报或心跳检查点时以结构化分段与全文折叠展开呈现，不再刷屏单行原始 JSON。
+
+![对话内嵌工具卡片](./docs/images/wait-card.png)
+
+### 4. 共享黑板（Board）与成员控制抽屉（Members & Drawer）
+- **黑板（Board）**：支持按频道（`#main` / `#backend` / `#perf`）、发送方、提及对象筛选，支持 `#序号` 定位、搜索与人工直接发帖 `@唤醒` 任意成员。
+- **成员（Members）**：查看工作区模式、Git 分支、步数与实时活动；点击任一成员可打开右侧控制抽屉，执行**原地切换模型（保留完整历史）**、**唤醒发送指令（Nudge）**、**停止运行（Stop）**或**终止清理（Kill）**。
+
+| 共享黑板 | 成员与实时控制抽屉 |
+|---|---|
+| ![共享黑板](./docs/images/board.png) | ![成员与控制抽屉](./docs/images/members-drawer.png) |
+
+### 5. 蜂巢图谱（Graph）与按角色定制模型（Role Model Presets）
+- **图谱（Graph）**：在「蜂巢视图」与「提及网络」之间切换，支持时间轴回放、倍速调节与纯前端 **GIF89a 动图导出**。
+- **按角色定制模型**：在「设置 → 蜂群设置」或顶栏「角色模型」弹窗中为 `default / explorer / author / verifier / monitor` 及任意自定义角色配置 Provider、Model 与支持的思考强度；支持实时 **刷新模型**，修改宿主模型后即时生效。
+
+| 蜂巢图谱与时间轴回放 | 按角色定制模型（热刷新） |
+|---|---|
+| ![蜂巢图谱](./docs/images/graph-hive.png) | ![角色模型设置](./docs/images/role-models.png) |
+---
+
+## 方案对比
+
+| 能力维度 | `linkbag/dsh-swarm-orchestrator` | `zhairy/dsh-agent-swarm` | Antigravity 原生 Swarm | **`dsh-ag-swarm`（本插件）** |
 |---|---|---|---|---|
-| Orchestration model | Static 4-role DAG (`architect/builder/reviewer/integrator`) | Fixed leader + 12 expert presets + Journal/Jev | Autonomous peers + shared blackboard | **Autonomous parallel peers + shared blackboard** |
-| Worker lifecycle | One-shot stateless `spawn` | `startActivation` / `sendMessage` | Persistent `working/waiting/stopped/killed` | **Persistent `ctx.agents` pool (`working/waiting/stopped/killed`) + `startActivation` fallback** |
-| Peer communication | Unidirectional (`swarm_report` to lead) | Lead-coordinated | Full `@name`, `@all`, `@#channel` doorbells | **Full `@name`, `@prefix` pools, `@all`, `@#channel` doorbells** |
-| Context inheritance | Fresh spawn only | Seed/notebook bindings | `fork: "<member>" \| "coordinator"` | **`fork` from persisted session events** |
-| Workspace isolation | Shared `cwd` (overlap warning only) | Host worktree + boundary fence | `inherit` / `share` / `branch` | **`inherit` / `share` (`ctx.worktrees` or `git worktree`) / `branch` (`git clone`)** |
-| DSH sidebar running state | Drops to idle after dispatch | Managed by leader loop | Always visible in Swarm board | **Coordinator `swarm_wait` holds Promise open (0 LLM tokens) so sidebar stays `running`** |
-| Model switching | Per-role static pin | Route table + next-call selection | In-place `model` switch while `waiting` | **In-place `agent.model.select` preserving full history + UI Drawer switch** |
-| Web UI | Single Kanban/DAG tab | Task progress + model controls | 5-Tab Hive/Board/Members/Graph/Raw + Pixel Bees | **5-Tab Hive/Board/Members/Graph/Raw + Pixel Bees + Drawer + Composer + GIF89a** |
+| 编排模式 | 固定 4 角色 DAG | 固定 Leader + 12 专家预设 | 自主对等协作 + 共享黑板 | **自主并行协作 + 共享频道黑板** |
+| 生命周期 | 一次性无状态派发 | `startActivation` / `sendMessage` | `working/waiting/stopped/killed` | **持久化 `ctx.agents` 池 + `startActivation` 回退** |
+| 通信唤醒 | 单向汇总给 Leader | Leader 统一调度 | `@name`、`@all`、`@#channel` | **`@name`、`@prefix`、`@all`、`@#channel` 门铃唤醒** |
+| 上下文与预设 | 空白新建，共享目录 | Seed/Notebook + worktree | `fork` 历史 + worktree 隔离 | **`fork` 历史 + `agentPresets` 完整工具与权限继承** |
+| 保活与交互 | 派发后主会话变空闲 | 由 Leader 循环维护 | Swarm 面板与内嵌状态 | **`swarm_wait` 零 Token 保活 + `WaitToolCard` + 单点/全局停止** |
+| 可视化面板 | 单看板 / DAG | 任务进度与模型控制 | 多标签页 + 像素蜜蜂 + 子代理视图 | **6 标签页（总览/黑板/子代理/成员/图谱/原始数据）+ 抽屉 + GIF 导出** |
 
 ---
 
-## How DSH Integration Works (`0.2.2-rc.3+`)
+## 快速安装与使用
 
-1. **Cordis Bundle Manifest (`package.json` + `cordis.patch.yml`)**
-   - `package.json` declares `dsh.bundle.patch: "./cordis.patch.yml"` and `dsh.client: { platform: "web", inject: ["@deepseek-ai/dsh-client-ui-conversation"] }`.
-   - `cordis.patch.yml` mounts `id: ag-swarm` with `storageDir: !!js dshHomePath("storages/ag-swarm")` (unquoted `!!js` expression).
-   - Client bundle (`lib/client.js`) is compiled by `esbuild` into `window.__ModuleLoader__.load({ id: "dsh-ag-swarm", factory })`.
-2. **Cross-Version Host Adapter (`src/runtime/dsh-adapter.ts`)**
-   - Inspired by `zhairy/dsh-agent-swarm`, probes host capabilities before calling:
-     - Prefers `ctx.agents.create` / `ctx.agents.resume` for persistent concurrent workers; falls back to `subagents.startActivation` (detecting `0.2.2-rc.3+` flat spec via `typeof subagents.listDescendants === 'function'`, or legacy `subagents.start`).
-     - Registers V4 `MessageSourceMap` (`source: { kind: "plugin:dsh-ag-swarm" }`) compliant with `assertV4MessageSources`.
-     - Guards `ctx.connection.admit({ headers: req.headers })` on every `/ag-swarm/*` HTTP & SSE endpoint.
-3. **DSH Sidebar Main-Session Running State (`swarm_wait`)**
-   - DSH's sidebar displays the active working spinner strictly when `ctx.agents.get(sessionId)?.status === "running"`.
-   - **`coordinator`** calling `swarm_wait`: holds the tool Promise open at **0 LLM token burn** while listening to `store.on('update')`, `agent/inbox/inserted` (user steering), and `AbortSignal`, resolving as soon as `@coordinator`, `@all`, user input, or all-workers-idle occurs.
-   - **`worker`** calling `swarm_wait`: immediately parks at `waiting` (zero tokens) and wakes via `agent.steer(...)` when `@name` / `@all` / `@#channel` rings its doorbell.
-4. **Collision-Safe Registration & Role Model Presets**
-   - Registers `/swarm` as the primary slash command (with `/ag-swarm` fallback alias; safely skips if `/swarm` is already claimed), and falls back from `swarm_wait` to `ag_swarm_wait` if another plugin occupies `swarm_wait`.
-   - **Settings UI Role Model Presets (`设置 → 蜂群设置 → 按角色定制模型`)**: Customize Provider, Model, and Reasoning Effort per built-in role (`default`, `explorer`, `author`, `verifier`, `monitor`) or any custom role in the UI (persisted to `<storageDir>/model-presets.json`), and automatically applied when spawning workers (`explicitModel > role_preset > custom role > worker-name heuristic > default > inherit`).
+### 方式一：DSH 桌面端插件管理直接安装（推荐）
 
----
+在 **DeepSeek Harness (`>= 0.2.2-rc.3`)** →「插件管理」→「从 Git URL 导入」填入：
 
-## Tools, Commands & Web UI (默认简体中文 + `EN / 中文` 切换)
+```text
+https://github.com/libo0118/dsh-ag-swarm.git#v0.1.10
+```
 
-- **Model Tools**: `swarm` (`title`, `add` with `role_preset`, `status`, `models`, `model`, `kill`, `channel`, `plan`), `post_message`, `read_board`, `swarm_wait` (or `ag_swarm_wait`).
-- **Slash Command**: `/swarm <goal | status | title <t> | add <name> <brief> | post <msg> | kill <name> | help>` (`/ag-swarm` alias supported)
-- **Virtual Skills**: `ag-swarm-coordinator`, `ag-swarm-worker`
-- **Web UI Slots (`client/index.ts`, 默认简体中文，右上角支持切换中/英文)**:
-  - `conversation.view` (`蜂群` / `Swarm`): **总览 (Overview)**、**黑板 (Board)**、**成员 (Members + 抽屉切模/Nudge/Kill)**、**图谱 (Hive 蜂巢 + Mentions 网络 + GIF89a 导出)**、**原始数据 (Raw)**。
-  - `conversation.session.header.actions`: 顶栏像素蜜蜂状态胶囊。
-  - `tool.call.toolview` (`swarm`): 紧凑工具调度卡片。
-  - `settings.section` (`蜂群设置` / `Hive Swarm`): 实时 SSE 状态、活跃蜂群列表、**按角色定制模型**面板、插件运行参数。
+> 仓库内已提交预编译产物 `lib/` 与 `cordis.patch.yml`，安装并重启 DSH 后即可直接使用。
+
+### 方式二：常用命令与工具
+
+- **斜杠命令**：
+  - `/swarm <目标>`：启动或继续当前会话的蜂群协作（若 `/swarm` 已被其他插件占用，自动注册 `/ag-swarm` 别名）
+  - `/swarm status` | `/swarm title <标题>` | `/swarm add <成员名> <任务>` | `/swarm post <内容>` | `/swarm kill <成员名>` | `/swarm help`
+- **模型可用工具**：`swarm`（`title / add / status / models / model / kill / channel / plan`）、`post_message`、`read_board`、`swarm_wait`（冲突时自动退避为 `ag_swarm_wait`）。
+- **默认界面语言**：简体中文，可在蜂群面板右上角点击 `EN / 中文` 实时切换。
 
 ---
 
-## Build, Doctor, Test & Install
+## 本地构建、自检与开发安装
 
 ```bash
-# 1. Install dependencies & build server + client bundle
+# 1. 安装依赖、类型检查与全量构建（服务端 + 前端 lib/client.js）
 pnpm install
-npm run typecheck
-npm run build
+pnpm run typecheck
+pnpm run build
 
-# 2. Run unit & integration tests (core channels/store/projection + worker pool/worktree/SSE)
-npm test
+# 2. 运行单元与集成测试（黑板/投影 + 并发 Worker/Worktree/SSE/热刷新）
+pnpm test
 
-# 3. Check environment, manifest, YAML & build artifacts
-npm run doctor
+# 3. 环境、Manifest、YAML !!js 语法与构建产物自检
+pnpm run doctor
 
-# 4. Pack distributable tarball for DSH Desktop Plugin Manager
-npm run pack:tgz
-
-# 5. Link into an isolated non-desktop DSH profile (e.g. web or dev-swarm)
+# 4. 打本地分发包或挂载到指定 DSH Profile
+pnpm run pack:tgz
 node tools/install-local.mjs --profile dev-swarm
 ```
