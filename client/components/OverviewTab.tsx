@@ -7,6 +7,7 @@ import type {
   ThreadView,
 } from '../../src/shared/protocol'
 import { getBeeColor, getBeeDataUrl, getBeeTileBg, PixelBee } from '../bee-sprites'
+import { t, useUiLocale } from '../i18n'
 import { swarmClientStore } from '../store'
 import type { WorkspaceTab } from './SwarmWorkspace'
 
@@ -119,6 +120,8 @@ function ReelLightbox({
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  const locale = useUiLocale()
+  const zh = locale === 'zh-CN'
   const frame = frames[idx]
   if (!frame) return <></>
   const src = swarmClientStore.frameUrl(swarmId, frame.path)
@@ -128,16 +131,18 @@ function ReelLightbox({
       className="ag-tv"
       role="dialog"
       aria-modal="true"
-      aria-label="Progress timeline viewer"
+      aria-label={t('overview.reel')}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="ag-tvh">
-        <b>Progress</b>
+        <b>{t('overview.reel')}</b>
         <span className="ag-tvpos">
-          {idx === frames.length - 1 ? `Now · ${idx + 1} / ${frames.length}` : `${idx + 1} / ${frames.length}`}
+          {idx === frames.length - 1
+            ? `${zh ? '当前' : 'Now'} · ${idx + 1} / ${frames.length}`
+            : `${idx + 1} / ${frames.length}`}
         </span>
         <span className="ag-tvwhen">{formatFrameTime(frame)}</span>
-        <button type="button" className="ag-tvx" aria-label="Close" onClick={onClose}>✕</button>
+        <button type="button" className="ag-tvx" aria-label={t('common.close')} onClick={onClose}>✕</button>
       </div>
       <div className="ag-tvstage">
         <div
@@ -151,13 +156,13 @@ function ReelLightbox({
             onClick={() => setZoomed((z) => !z)}
           />
         </div>
-        <button type="button" className="ag-tvnav prev" aria-label="Previous" disabled={idx <= 0} onClick={() => go(idx - 1)}>‹</button>
-        <button type="button" className="ag-tvnav next" aria-label="Next" disabled={idx >= frames.length - 1} onClick={() => go(idx + 1)}>›</button>
+        <button type="button" className="ag-tvnav prev" aria-label={zh ? '上一帧' : 'Previous'} disabled={idx <= 0} onClick={() => go(idx - 1)}>‹</button>
+        <button type="button" className="ag-tvnav next" aria-label={zh ? '下一帧' : 'Next'} disabled={idx >= frames.length - 1} onClick={() => go(idx + 1)}>›</button>
       </div>
       <div>
-        <p style={{ margin: 0, fontSize: 13, fontWeight: 500 }}>{frame.caption || `Frame at #${frame.seq}`}</p>
+        <p style={{ margin: 0, fontSize: 13, fontWeight: 500 }}>{frame.caption || (zh ? `第 #${frame.seq} 条动态截图` : `Frame at #${frame.seq}`)}</p>
         <p style={{ margin: '2px 0 0', fontSize: 12, color: 'rgba(241,243,244,0.66)' }}>
-          @{frame.agent} · #{frame.seq}{totalTasks > 0 ? ` · ${totalTasks} tasks tracked` : ''}
+          @{frame.agent} · #{frame.seq}{totalTasks > 0 ? (zh ? ` · 共跟踪 ${totalTasks} 项任务` : ` · ${totalTasks} tasks tracked`) : ''}
         </p>
       </div>
       <div className="ag-tvstrip" role="listbox" aria-label="Frames">
@@ -180,6 +185,8 @@ function ReelLightbox({
 }
 
 function OnboardingView({ snapshot }: { snapshot: SwarmSnapshotPayload }): JSX.Element {
+  const locale = useUiLocale()
+  const zh = locale === 'zh-CN'
   const realWorkers = Object.values(snapshot.members)
     .filter((m) => m.role !== 'coordinator' && !m.killed)
     .map((m) => m.name)
@@ -226,29 +233,40 @@ function OnboardingView({ snapshot }: { snapshot: SwarmSnapshotPayload }): JSX.E
           </span>
         ))}
       </div>
-      <h2 className="ag-onb-h">Your swarm is starting</h2>
+      <h2 className="ag-onb-h">{t('overview.onboardingTitle')}</h2>
       <ol className="ag-onb-steps">
         <li>
           <span className="ag-onb-i" style={{ background: getBeeTileBg('coordinator', 'coordinator') }}>
             <img src={getBeeDataUrl('coordinator', 'coordinator', 'landed')} alt="" width={22} height={18} />
           </span>
-          <div><b>One goal</b><span>The coordinator splits it into parallel tracks.</span></div>
+          <div>
+            <b>{zh ? '一个目标' : 'One goal'}</b>
+            <span>{zh ? '协调者将目标拆解为多个独立并行轨道。' : 'The coordinator splits it into parallel tracks.'}</span>
+          </div>
         </li>
         <li>
           <span className="ag-onb-i" style={{ background: getBeeTileBg(ws[0]) }}>
             <img src={getBeeDataUrl(ws[0], 'worker', 'landed')} alt="" width={22} height={18} />
           </span>
-          <div><b>Many workers</b><span>Each owns a slice and runs concurrently.</span></div>
+          <div>
+            <b>{zh ? '多子代理并发' : 'Many workers'}</b>
+            <span>{zh ? '每位成员认领专属范围并真正并行执行。' : 'Each owns a slice and runs concurrently.'}</span>
+          </div>
         </li>
         <li>
           <span className="ag-onb-i" style={{ background: getBeeTileBg(ws[1]) }}>
             <img src={getBeeDataUrl(ws[1], 'worker', 'landed')} alt="" width={22} height={18} />
           </span>
-          <div><b>One board</b><span>Updates land here in real time. You step in only when asked.</span></div>
+          <div>
+            <b>{zh ? '统一共享黑板' : 'One board'}</b>
+            <span>{t('overview.onboardingDesc')}</span>
+          </div>
         </li>
       </ol>
       <p className="ag-onb-wait">
-        <span className="ag-shimmer" style={{ animationDelay: shimmerDelay() }}>Waiting for the first update</span>
+        <span className="ag-shimmer" style={{ animationDelay: shimmerDelay() }}>
+          {zh ? '正在等待首条黑板动态…' : 'Waiting for the first update'}
+        </span>
       </p>
     </section>
   )
@@ -274,6 +292,8 @@ function ProgressReelCard({
     setIndex((prev) => Math.min(Math.max(0, prev), Math.max(0, frames.length - 1)))
   }, [frames.length])
 
+  const locale = useUiLocale()
+  const zh = locale === 'zh-CN'
   if (frames.length === 0) return null
   const clampedIdx = Math.min(index, frames.length - 1)
   const cur = frames[clampedIdx]
@@ -286,7 +306,7 @@ function ProgressReelCard({
     <>
       <section className="ag-o2-reel" data-testid="swarm-progress-reel">
         <div className="ag-o2-rh">
-          <span className="ag-o2-glbl">Progress</span>
+          <span className="ag-o2-glbl">{t('overview.reel')}</span>
           <span className="ag-o2-rwhen">{formatFrameTime(cur)}</span>
           {canCompare && (
             <button
@@ -295,16 +315,16 @@ function ProgressReelCard({
               aria-pressed={compare}
               onClick={() => setCompare((c) => !c)}
             >
-              {compare ? 'Hide compare' : 'Compare with now'}
+              {compare ? t('overview.exitCompare') : t('overview.compare')}
             </button>
           )}
         </div>
 
         <div className="ag-o2-rstage">
-          {compare && canCompare && <img src={latestSrc} alt="Latest frame" />}
+          {compare && canCompare && <img src={latestSrc} alt={zh ? '最新截图' : 'Latest frame'} />}
           <img
             src={curSrc}
-            alt={cur.caption || `Frame #${cur.seq}`}
+            alt={cur.caption || `#${cur.seq}`}
             style={{
               clipPath: compare && canCompare ? `inset(0 ${100 - swipe}% 0 0)` : 'none',
               cursor: compare ? 'ew-resize' : 'zoom-in',
@@ -320,19 +340,19 @@ function ProgressReelCard({
                 min={0}
                 max={100}
                 value={swipe}
-                aria-label="Compare then and now"
+                aria-label={zh ? '拖动对比历史与当前' : 'Compare then and now'}
                 onChange={(e) => setSwipe(Number(e.target.value))}
               />
             </>
           )}
           <span className="ag-o2-rtag">
-            {clampedIdx === frames.length - 1 ? 'Now' : `${clampedIdx + 1} / ${frames.length}`}
+            {clampedIdx === frames.length - 1 ? (zh ? '当前' : 'Now') : `${clampedIdx + 1} / ${frames.length}`}
           </span>
           <button
             type="button"
             className="ag-o2-rexp"
-            aria-label="Open full timeline"
-            title="Open full timeline"
+            aria-label={zh ? '全屏查看时间轴' : 'Open full timeline'}
+            title={zh ? '全屏查看时间轴' : 'Open full timeline'}
             onClick={() => setLightboxOpen(true)}
           >
             <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -341,9 +361,9 @@ function ProgressReelCard({
           </button>
         </div>
 
-        <p className="ag-o2-rcap">{cur.caption || `Update by @${cur.agent} (#${cur.seq})`}</p>
+        <p className="ag-o2-rcap">{cur.caption || (zh ? `@${cur.agent} 汇报 (#${cur.seq})` : `Update by @${cur.agent} (#${cur.seq})`)}</p>
         <p className="ag-o2-rmeta">
-          @{cur.agent} · #{cur.seq}{totalTasks > 0 ? ` · ${doneTasks} of ${totalTasks} tasks done` : ''}
+          @{cur.agent} · #{cur.seq}{totalTasks > 0 ? ` · ${t('overview.tasksDone', { done: doneTasks, total: totalTasks })}` : ''}
         </p>
 
         {frames.length > 1 && (
@@ -383,20 +403,33 @@ function ProgressReelCard({
   )
 }
 
-function threadStatusLabel(t: ThreadView): string {
-  if (t.state === 'waiting') {
+function threadStatusLabel(th: ThreadView, zh: boolean): string {
+  if (th.state === 'waiting') {
     const waiters = new Set<string>()
-    for (const task of t.tasks) {
+    for (const task of th.tasks) {
       for (const w of task.waiting_on ?? []) waiters.add(w)
     }
-    if (waiters.size === 1) return `Waiting on @${[...waiters][0]}`
-    if (waiters.size > 1) return `Waiting on ${waiters.size}`
-    return 'Waiting'
+    if (waiters.size === 1) return t('members.waitingOn', { target: [...waiters][0] })
+    if (waiters.size > 1) return zh ? `等待 ${waiters.size} 位成员` : `Waiting on ${waiters.size}`
+    return t('members.state.waiting')
   }
-  return THREAD_LABEL[t.state]
+  if (zh) {
+    const map: Record<ThreadPriorityState, string> = {
+      needs: '需要关注',
+      waiting: '等待中',
+      stuck: '疑似卡住',
+      running: '推进中',
+      queued: '待启动',
+      done: '已完成',
+    }
+    return map[th.state]
+  }
+  return THREAD_LABEL[th.state]
 }
 
 export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabProps): JSX.Element {
+  const locale = useUiLocale()
+  const zh = locale === 'zh-CN'
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null)
   const [doneOpen, setDoneOpen] = useState(false)
   const [showAllRun, setShowAllRun] = useState(false)
@@ -504,7 +537,14 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
 
     return (
       <section className="ag-o2-team">
-        <h3 className="ag-o2-h">The team</h3>
+        <h3 className="ag-o2-h">
+          <span>{t('overview.team')}</span>
+          {activeFilter && (
+            <button type="button" className="ag-ghost-btn" onClick={() => setSelectedWorker(null)}>
+              {t('overview.filterBy', { name: activeFilter })} · {t('overview.clearFilter')}
+            </button>
+          )}
+        </h3>
         <div className="ag-o2-lead">
           <span className="ag-o2-tile lg" style={{ background: getBeeTileBg('coordinator', 'coordinator') }}>
             <PixelBee
@@ -515,22 +555,26 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
             />
           </span>
           <div className="ag-o2-lb">
-            <b>Coordinator</b>
+            <b>{t('members.coordinator')}</b>
             {coordinator?.activity && coordinator.state === 'working' ? (
               <p className="ag-shimmer" style={{ animationDelay: shimmerDelay() }}>{coordinator.activity}</p>
             ) : (
-              <p>{coordinator?.task_hint || snapshot.plan?.goal.line || `${crew.length} active team member${crew.length === 1 ? '' : 's'}`}</p>
+              <p>
+                {coordinator?.task_hint ||
+                  snapshot.plan?.goal.line ||
+                  (zh ? `${crew.length} 位活跃成员` : `${crew.length} active team member${crew.length === 1 ? '' : 's'}`)}
+              </p>
             )}
           </div>
         </div>
 
         {crew.length > 0 && (
-          <div className="ag-o2-crew" role="group" aria-label="Filter by worker">
+          <div className="ag-o2-crew" role="group" aria-label={zh ? '按成员筛选' : 'Filter by worker'}>
             <button
               type="button"
               className={`ag-o2-m ${!activeFilter ? 'on' : ''}`}
               aria-pressed={!activeFilter}
-              title="All workers"
+              title={t('overview.clearFilter')}
               onClick={() => setSelectedWorker(null)}
             >
               <span className="ag-o2-tile sm all">
@@ -542,7 +586,7 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
                   ))}
                 </span>
               </span>
-              <span>All</span>
+              <span>{t('common.all')}</span>
             </button>
 
             {shown.map((m) => {
@@ -569,18 +613,18 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
               <button
                 type="button"
                 className="ag-o2-m"
-                title={`View all ${crew.length} members`}
+                title={zh ? `查看全部 ${crew.length} 位成员` : `View all ${crew.length} members`}
                 onClick={() => onSwitchTab('members')}
               >
                 <span className="ag-o2-tile sm plus">+{extra}</span>
-                <span>More</span>
+                <span>{zh ? '更多' : 'More'}</span>
               </button>
             )}
           </div>
         )}
       </section>
     )
-  }, [crew, activeFilter, coordinator, snapshot.plan, onSwitchTab])
+  }, [crew, activeFilter, coordinator, snapshot.plan, onSwitchTab, zh])
 
   if (isOnboarding) {
     return (
@@ -631,11 +675,11 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="ag-o2-sttop">
               <span className="ag-o2-stdot" aria-hidden="true" />
-              <b>Swarm stalled — no agents working</b>
+              <b>{t('overview.stallTitle')}</b>
               <button
                 type="button"
                 className="ag-o2-sttag"
-                title={`Go to #${snapshot.stallBanner.seq} on the Board`}
+                title={zh ? `跳转到黑板 #${snapshot.stallBanner.seq}` : `Go to #${snapshot.stallBanner.seq} on the Board`}
                 onClick={() => onJumpToSeq(snapshot.stallBanner!.seq)}
               >
                 @{snapshot.stallBanner.agent} #{snapshot.stallBanner.seq}
@@ -647,7 +691,7 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
       )}
 
       <section className="ag-o2-card">
-        <div className="ag-o2-glbl">Goal</div>
+        <div className="ag-o2-glbl">{t('overview.goal')}</div>
         <b className="ag-o2-goal-title">{goalTitle}</b>
         {goalLine && <p className="ag-o2-goal-line">{goalLine}</p>}
       </section>
@@ -656,7 +700,7 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
         <section className="ag-o2-card" data-testid="swarm-running-card">
           <div className="ag-o2-runh">
             <span className="ag-o2-rundot" aria-hidden="true" />
-            <b>Running</b>
+            <b>{t('overview.running')}</b>
             <em>{taskSummary.running.length}</em>
           </div>
           <ul className="ag-o2-runlist">
@@ -689,7 +733,7 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
                       <p className="ag-o2-runnote" style={{ color: 'var(--ag-error)' }}>{item.failure}</p>
                     ) : item.waitingOn && item.waitingOn.length > 0 ? (
                       <p className="ag-o2-runnote" style={{ color: 'var(--ag-warning)' }}>
-                        Waiting on {item.waitingOn.map((w) => `@${w}`).join(', ')}
+                        {t('members.waitingOn', { target: item.waitingOn.join(', @') })}
                       </p>
                     ) : null}
                   </div>
@@ -699,7 +743,7 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
           </ul>
           {taskSummary.running.length > visibleRunning.length && (
             <button type="button" className="ag-o2-more" onClick={() => setShowAllRun((v) => !v)}>
-              +{taskSummary.running.length - visibleRunning.length} more
+              {t('common.showMore')} (+{taskSummary.running.length - visibleRunning.length})
             </button>
           )}
         </section>
@@ -719,19 +763,19 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
             queued={taskSummary.tot.queued}
           />
           <span className="ag-o2-progt">
-            <b>{taskSummary.tot.done} of {totalTasks || snapshot.stats.totalTasks}</b> tasks done
+            <b>{t('overview.tasksDone', { done: taskSummary.tot.done, total: totalTasks || snapshot.stats.totalTasks })}</b>
           </span>
           <span className="ag-o2-progr">
             {taskSummary.tot.blocked > 0 && (
-              <span className="ag-o2-pchip warn"><i aria-hidden="true" />{taskSummary.tot.blocked} waiting</span>
+              <span className="ag-o2-pchip warn"><i aria-hidden="true" />{t('overview.waitingCount', { count: taskSummary.tot.blocked })}</span>
             )}
             {snapshot.stats.stuckCount > 0 && (
-              <span className="ag-o2-pchip bad"><i aria-hidden="true" />{snapshot.stats.stuckCount} stuck</span>
+              <span className="ag-o2-pchip bad"><i aria-hidden="true" />{t('overview.stuckCount', { count: snapshot.stats.stuckCount })}</span>
             )}
             {openThreadsCount > 0 ? (
-              <span className="ag-o2-pchip">{openThreadsCount} thread{openThreadsCount === 1 ? '' : 's'} open</span>
+              <span className="ag-o2-pchip">{t('overview.threadsOpen', { count: openThreadsCount })}</span>
             ) : taskSummary.tot.running > 0 ? (
-              <span className="ag-o2-pchip info"><i aria-hidden="true" />{taskSummary.tot.running} active</span>
+              <span className="ag-o2-pchip info"><i aria-hidden="true" />{t('header.working', { count: taskSummary.tot.running })}</span>
             ) : null}
             <span className="ag-o2-chev" aria-hidden="true" />
           </span>
@@ -741,12 +785,13 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
           <div className="ag-o2-progb">
             {visibleDone.length > 0 ? (
               <>
+                <div className="ag-o2-qhdr">{t('overview.doneList')} · {taskSummary.done.length}</div>
                 <ul className="ag-o2-donelist">
                   {visibleDone.map((item) => {
                     const m = snapshot.members[item.owner]
                     return (
                       <li key={item.id}>
-                        <span className="ag-o2-ti done" aria-label="done">✓</span>
+                        <span className="ag-o2-ti done" aria-label={t('overview.doneList')}>✓</span>
                         <div className="ag-o2-donem"><b>{item.label}</b></div>
                         <span className="ag-o2-wchip">
                           <PixelBee name={item.owner} role={m?.role} state="landed" size={1} />
@@ -758,23 +803,25 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
                 </ul>
                 {taskSummary.done.length > visibleDone.length && (
                   <button type="button" className="ag-o2-more" onClick={() => setShowAllDone((v) => !v)}>
-                    +{taskSummary.done.length - visibleDone.length} more
+                    {t('common.showMore')} (+{taskSummary.done.length - visibleDone.length})
                   </button>
                 )}
               </>
             ) : (
-              <p style={{ margin: '6px 0 2px', fontSize: 12.5, color: 'var(--ag-fg-muted)' }}>No tasks completed yet.</p>
+              <p style={{ margin: '6px 0 2px', fontSize: 12.5, color: 'var(--ag-fg-muted)' }}>
+                {zh ? '暂无已完成的任务。' : 'No tasks completed yet.'}
+              </p>
             )}
 
             {taskSummary.queued.length > 0 && (
               <div>
-                <div className="ag-o2-qhdr">Up next · {taskSummary.queued.length}</div>
+                <div className="ag-o2-qhdr">{t('overview.upNext')} · {taskSummary.queued.length}</div>
                 <ul className="ag-o2-donelist">
                   {taskSummary.queued.slice(0, 6).map((item) => {
                     const m = snapshot.members[item.owner]
                     return (
                       <li key={item.id}>
-                        <span className="ag-o2-ti queued" aria-label="queued" />
+                        <span className="ag-o2-ti queued" aria-label={t('overview.upNext')} />
                         <div className="ag-o2-donem"><b>{item.label}</b></div>
                         <span className="ag-o2-wchip">
                           <PixelBee name={item.owner} role={m?.role} state="landed" size={1} />
@@ -799,32 +846,32 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
 
       {filteredThreads.length > 0 && (
         <section className="ag-o2-threads">
-          <h3 className="ag-o2-h">Threads <em>{filteredThreads.length}</em></h3>
-          {filteredThreads.map((t) => {
-            const defaultOpen = t.state === 'needs' || t.state === 'waiting' || t.state === 'stuck'
-            const isOpen = t.tasks.length > 0 && (openThreads[t.id] ?? defaultOpen)
-            const doneN = t.tasks.filter((x) => x.done).length
-            const runN = t.tasks.filter((x) => !x.done && x.state === 'working' && !x.waiting_on?.length && !x.failure).length
-            const blkN = t.tasks.filter((x) => !x.done && (Boolean(x.waiting_on?.length) || Boolean(x.failure))).length
-            const queN = Math.max(0, t.tasks.length - doneN - runN - blkN)
-            const statusLbl = threadStatusLabel(t)
+          <h3 className="ag-o2-h">{t('overview.threads')} <em>{filteredThreads.length}</em></h3>
+          {filteredThreads.map((th) => {
+            const defaultOpen = th.state === 'needs' || th.state === 'waiting' || th.state === 'stuck'
+            const isOpen = th.tasks.length > 0 && (openThreads[th.id] ?? defaultOpen)
+            const doneN = th.tasks.filter((x) => x.done).length
+            const runN = th.tasks.filter((x) => !x.done && x.state === 'working' && !x.waiting_on?.length && !x.failure).length
+            const blkN = th.tasks.filter((x) => !x.done && (Boolean(x.waiting_on?.length) || Boolean(x.failure))).length
+            const queN = Math.max(0, th.tasks.length - doneN - runN - blkN)
+            const statusLbl = threadStatusLabel(th, zh)
 
             return (
-              <section key={t.id} className={`ag-o2-th ${t.state} ${isOpen ? 'open' : ''}`}>
+              <section key={th.id} className={`ag-o2-th ${th.state} ${isOpen ? 'open' : ''}`}>
                 <button
                   type="button"
                   className="ag-o2-thh"
                   aria-expanded={isOpen}
-                  disabled={t.tasks.length === 0}
-                  onClick={() => setOpenThreads((prev) => ({ ...prev, [t.id]: !isOpen }))}
+                  disabled={th.tasks.length === 0}
+                  onClick={() => setOpenThreads((prev) => ({ ...prev, [th.id]: !isOpen }))}
                 >
-                  <span className={`ag-o2-thd ${t.state}`} aria-hidden="true" />
+                  <span className={`ag-o2-thd ${th.state}`} aria-hidden="true" />
                   <span className="ag-o2-tht">
-                    <b>{t.title}</b>
-                    {statusLbl !== t.title && <em>{statusLbl}</em>}
+                    <b>{th.title}</b>
+                    {statusLbl !== th.title && <em>{statusLbl}</em>}
                   </span>
                   <span className="ag-o2-thc">
-                    {t.tasks.length > 0 && (
+                    {th.tasks.length > 0 && (
                       <>
                         <span className="ag-o2-mbar" aria-hidden="true">
                           {doneN > 0 && <i className="done" style={{ flex: doneN }} />}
@@ -832,22 +879,22 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
                           {blkN > 0 && <i className="blocked" style={{ flex: blkN }} />}
                           {queN > 0 && <i className="queued" style={{ flex: queN }} />}
                         </span>
-                        <span>{doneN}/{t.tasks.length}</span>
+                        <span>{doneN}/{th.tasks.length}</span>
                       </>
                     )}
                   </span>
-                  {t.tasks.length > 0 && <span className="ag-o2-chev" aria-hidden="true" />}
+                  {th.tasks.length > 0 && <span className="ag-o2-chev" aria-hidden="true" />}
                 </button>
-                {t.goal && <p className="ag-o2-thg">{t.goal}</p>}
-                {t.now && (
+                {th.goal && <p className="ag-o2-thg">{th.goal}</p>}
+                {th.now && (
                   <p className="ag-o2-thn">
-                    {t.state !== 'done' && <span>Now</span>}
-                    {t.now}
+                    {th.state !== 'done' && <span>{zh ? '当前' : 'Now'}</span>}
+                    {th.now}
                   </p>
                 )}
                 {isOpen && (
                   <ul className="ag-o2-tasks">
-                    {t.tasks.map((task, idx) => {
+                    {th.tasks.map((task, idx) => {
                       const st = task.done
                         ? 'done'
                         : task.failure || task.waiting_on?.length
@@ -862,7 +909,7 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
                           <span className="ag-o2-tt">
                             {task.label}
                             {task.waiting_on && task.waiting_on.length > 0 && (
-                              <span className="ag-o2-tw">Waiting on {task.waiting_on.map((w) => `@${w}`).join(', ')}</span>
+                              <span className="ag-o2-tw">{t('members.waitingOn', { target: task.waiting_on.join(', @') })}</span>
                             )}
                           </span>
                           <span className="ag-o2-wchip">

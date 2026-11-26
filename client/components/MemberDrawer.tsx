@@ -6,6 +6,7 @@ import type {
   UiActionRequest,
 } from '../../src/shared/protocol'
 import { PixelBee, getBeeTileBg } from '../bee-sprites'
+import { t, useUiLocale } from '../i18n'
 import { swarmClientStore, type CatalogModelOption } from '../store'
 
 export interface MemberDrawerProps {
@@ -28,6 +29,8 @@ function stepBadgeColor(kind: TranscriptStepView['kind'], status?: TranscriptSte
 
 export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
   const { swarmId, member, models, onClose, onJumpToSeq, onAction } = props
+  const locale = useUiLocale()
+  const isZh = locale === 'zh-CN'
   const [transcript, setTranscript] = useState<MemberTranscriptPayload | null>(null)
   const [loading, setLoading] = useState(false)
   const [transcriptError, setTranscriptError] = useState<string | null>(null)
@@ -101,7 +104,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
     setActionFeedback(null)
     try {
       await onAction(req)
-      setActionFeedback({ kind: 'ok', text: `${label} succeeded.` })
+      setActionFeedback({ kind: 'ok', text: isZh ? `${label}已完成。` : `${label} succeeded.` })
       if (req.action === 'kill_worker') setConfirmKill(false)
       if (req.action === 'nudge_worker') setNudgeText('')
       void loadTranscript()
@@ -114,7 +117,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
 
   const handleSwitchModel = (): void => {
     if (!selectedOpt) return
-    void runAction('Model switch', {
+    void runAction(isZh ? '模型切换' : 'Model switch', {
       action: 'switch_model',
       swarmId,
       member: member.name,
@@ -126,7 +129,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
 
   const handleNudge = (): void => {
     const trimmed = nudgeText.trim()
-    void runAction('Nudge', {
+    void runAction(isZh ? '唤醒指令' : 'Nudge', {
       action: 'nudge_worker',
       swarmId,
       member: member.name,
@@ -135,7 +138,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
   }
 
   const handleKill = (): void => {
-    void runAction('Kill worker', {
+    void runAction(isZh ? '终止成员' : 'Kill worker', {
       action: 'kill_worker',
       swarmId,
       member: member.name,
@@ -215,7 +218,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                   color: 'var(--ag-fg-muted, #5d676f)',
                 }}
               >
-                {member.killed ? 'Retired' : member.state}
+                {member.killed ? t('members.state.killed') : t(`members.state.${member.state}` as 'members.state.working')}
               </span>
               {member.last_post_seq ? (
                 <button
@@ -226,7 +229,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                     onClose()
                   }}
                   style={{ height: 22, padding: '0 6px', fontFamily: 'var(--ag-mono, monospace)', fontSize: 11 }}
-                  title={`Jump to #${member.last_post_seq} on Board`}
+                  title={isZh ? `跳转到黑板 #${member.last_post_seq}` : `Jump to #${member.last_post_seq} on Board`}
                 >
                   #{member.last_post_seq}
                 </button>
@@ -242,8 +245,8 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
             type="button"
             className="ag-icon-btn"
             onClick={onClose}
-            aria-label="Close member drawer"
-            title="Close (Esc)"
+            aria-label={t('common.close')}
+            title={`${t('common.close')} (Esc)`}
           >
             ✕
           </button>
@@ -297,16 +300,16 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
             }}
           >
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--ag-fg-muted, #5d676f)' }}>
-              Controls
+              {t('drawer.controls')}
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <label style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)' }}>
-                Switch model {!canSwitchModel && !member.killed ? '(available while waiting/stopped)' : ''}
+                {t('drawer.switchModel')}
               </label>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <select
-                  aria-label="Select model"
+                  aria-label={t('drawer.switchBtn')}
                   value={selectedModelKey}
                   disabled={!canSwitchModel || busyAction !== null}
                   onChange={(e) => {
@@ -331,7 +334,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                 </select>
                 {efforts.length > 0 && (
                   <select
-                    aria-label="Reasoning effort"
+                    aria-label={t('settings.effortDefault')}
                     value={selectedEffort}
                     disabled={!canSwitchModel || busyAction !== null}
                     onChange={(e) => setSelectedEffort(e.target.value)}
@@ -344,7 +347,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                       fontSize: 12,
                     }}
                   >
-                    <option value="">Default effort</option>
+                    <option value="">{t('settings.effortDefault')}</option>
                     {efforts.map((ef) => (
                       <option key={ef} value={ef}>{ef}</option>
                     ))}
@@ -357,14 +360,14 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                   onClick={handleSwitchModel}
                   style={{ height: 30 }}
                 >
-                  {busyAction === 'Model switch' ? 'Switching…' : 'Switch'}
+                  {busyAction === (isZh ? '模型切换' : 'Model switch') ? (isZh ? '切换中…' : 'Switching…') : t('drawer.switchBtn')}
                 </button>
               </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <label style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)' }}>
-                Nudge (send wakeup message)
+                {t('drawer.nudge')}
               </label>
               <div style={{ display: 'flex', gap: 6 }}>
                 <input
@@ -375,7 +378,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !member.killed && busyAction === null) handleNudge()
                   }}
-                  placeholder={`Wake @${member.name} with optional note…`}
+                  placeholder={t('drawer.nudgePlaceholder', { name: member.name })}
                   style={{
                     flex: 1,
                     minWidth: 0,
@@ -394,7 +397,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                   onClick={handleNudge}
                   style={{ height: 30 }}
                 >
-                  {busyAction === 'Nudge' ? 'Sending…' : 'Nudge'}
+                  {busyAction === (isZh ? '唤醒指令' : 'Nudge') ? (isZh ? '发送中…' : 'Sending…') : t('drawer.nudgeBtn')}
                 </button>
               </div>
             </div>
@@ -408,12 +411,12 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                     disabled={busyAction !== null}
                     onClick={() => setConfirmKill(true)}
                   >
-                    Kill worker…
+                    {t('drawer.kill')}
                   </button>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 12, color: 'var(--ag-error, #cb3d3d)', fontWeight: 500 }}>
-                      Permanently kill @{member.name}?
+                      {t('drawer.killConfirm', { name: member.name })}
                     </span>
                     <button
                       type="button"
@@ -421,7 +424,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                       disabled={busyAction !== null}
                       onClick={handleKill}
                     >
-                      {busyAction === 'Kill worker' ? 'Killing…' : 'Confirm Kill'}
+                      {busyAction === (isZh ? '终止成员' : 'Kill worker') ? (isZh ? '终止中…' : 'Killing…') : t('drawer.confirmKillBtn')}
                     </button>
                     <button
                       type="button"
@@ -429,7 +432,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                       disabled={busyAction !== null}
                       onClick={() => setConfirmKill(false)}
                     >
-                      Cancel
+                      {t('common.cancel')}
                     </button>
                   </div>
                 )}
@@ -440,20 +443,20 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
           <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--ag-fg-muted, #5d676f)' }}>
-                Work Context & Transcript ({steps.length})
+                {t('drawer.transcript')} ({steps.length})
               </span>
               <button type="button" className="ag-ghost-btn" onClick={() => void loadTranscript()} disabled={loading}>
-                {loading ? 'Loading…' : 'Refresh'}
+                {loading ? t('common.refreshing') : t('common.refresh')}
               </button>
             </div>
             {transcriptError && (
               <div style={{ fontSize: 12, color: 'var(--ag-error, #cb3d3d)' }}>
-                Failed to load transcript: {transcriptError}
+                {isZh ? `加载轨迹失败：${transcriptError}` : `Failed to load transcript: ${transcriptError}`}
               </div>
             )}
             {!loading && !transcriptError && steps.length === 0 && (
               <div style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)' }}>
-                No transcript steps recorded yet.
+                {t('drawer.noSteps')}
               </div>
             )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import type {
   BoardMessage,
+  ConfigPayload,
   MemberTranscriptPayload,
   RawFilesPayload,
+  RoleModelMap,
   SseEventPayload,
   SwarmSnapshotPayload,
   SwarmSummary,
@@ -336,6 +338,43 @@ export class SwarmClientStore {
     return (await res.json()) as MemberTranscriptPayload
   }
 
+  async fetchConfig(): Promise<ConfigPayload> {
+    const res = await fetch('/ag-swarm/api/config', { cache: 'no-store' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const raw = (await res.json()) as Record<string, unknown>
+    const base =
+      raw.config && typeof raw.config === 'object'
+        ? { ...(raw.config as Record<string, unknown>), ...raw }
+        : raw
+    const presets =
+      base.modelPresets && typeof base.modelPresets === 'object'
+        ? (base.modelPresets as RoleModelMap)
+        : {}
+    return {
+      ...(base as unknown as ConfigPayload),
+      primaryCommand: typeof base.primaryCommand === 'string' && base.primaryCommand ? base.primaryCommand : '/swarm',
+      waitToolName: typeof base.waitToolName === 'string' && base.waitToolName ? base.waitToolName : 'swarm_wait',
+      modelPresets: presets,
+    }
+  }
+
+  async saveModelPresets(presets: RoleModelMap): Promise<RoleModelMap> {
+    const res = await fetch('/ag-swarm/api/model-presets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ modelPresets: presets }),
+    })
+    let json: Record<string, unknown> = {}
+    try {
+      json = (await res.json()) as Record<string, unknown>
+    } catch { /* non-json error body */ }
+    if (!res.ok || json.ok === false) {
+      throw new Error(typeof json.error === 'string' ? json.error : `HTTP ${res.status}`)
+    }
+    const saved = json.modelPresets ?? json.presets
+    return saved && typeof saved === 'object' ? (saved as RoleModelMap) : presets
+  }
+
   async postAction(req: UiActionRequest): Promise<Record<string, unknown>> {
     const res = await fetch('/ag-swarm/api/action', {
       method: 'POST',
@@ -580,6 +619,8 @@ export interface UseSwarmStoreResult extends SwarmClientState {
   fetchMessagesBefore: (swarmId: string, beforeSeq: number, limit?: number) => Promise<{ messages: BoardMessage[]; hasMore: boolean }>
   fetchRawFiles: (swarmId: string) => Promise<RawFilesPayload>
   fetchMemberTranscript: (swarmId: string, member: string) => Promise<MemberTranscriptPayload>
+  fetchConfig: () => Promise<ConfigPayload>
+  saveModelPresets: (presets: RoleModelMap) => Promise<RoleModelMap>
   listModels: (force?: boolean) => Promise<CatalogModelOption[]>
 }
 
@@ -610,6 +651,8 @@ export function useSwarmStore(sessionId?: string): UseSwarmStoreResult {
     fetchMessagesBefore: (swarmId, beforeSeq, limit) => swarmClientStore.fetchMessagesBefore(swarmId, beforeSeq, limit),
     fetchRawFiles: (swarmId) => swarmClientStore.fetchRawFiles(swarmId),
     fetchMemberTranscript: (swarmId, member) => swarmClientStore.fetchMemberTranscript(swarmId, member),
+    fetchConfig: () => swarmClientStore.fetchConfig(),
+    saveModelPresets: (presets) => swarmClientStore.saveModelPresets(presets),
     listModels: (force) => swarmClientStore.listModels(force),
   }
 }

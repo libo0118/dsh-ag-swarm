@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardMessage, MemberRecord, SwarmSnapshotPayload } from '../../src/shared/protocol'
 import { PixelBee, getBeeDataUrl } from '../bee-sprites'
+import { t, useUiLocale } from '../i18n'
 
 export interface HiveCanvasProps {
   snapshot: SwarmSnapshotPayload
@@ -210,6 +211,7 @@ function buildHiveCells(
   snapshot: SwarmSnapshotPayload,
   st: Record<string, HiveBeeState>,
   doneCheck: ((n: string) => boolean) | null,
+  isZh: boolean,
 ): HiveCell[] {
   const members = snapshot.members || {}
   const workers = Object.keys(members).filter(
@@ -247,7 +249,7 @@ function buildHiveCells(
     if (rest.length > 0) {
       cells.push({
         id: '_other',
-        title: 'Other',
+        title: isZh ? '其他成员' : 'Other',
         goal: '',
         bees: rest,
         total: rest.length,
@@ -255,22 +257,22 @@ function buildHiveCells(
       })
     }
   } else {
-    const buckets: Array<[string, (n: string) => boolean]> = [
-      ['Working', (n) => st[n]?.st === 'working'],
-      ['Waiting', (n) => st[n]?.st === 'wait' || st[n]?.st === 'issue'],
-      ['Resting', (n) => st[n]?.st === 'idle'],
-      ['Done', settled],
+    const buckets: Array<[string, string, (n: string) => boolean, boolean]> = [
+      ['_working', t('members.state.working'), (n) => st[n]?.st === 'working', false],
+      ['_waiting', t('members.state.waiting'), (n) => st[n]?.st === 'wait' || st[n]?.st === 'issue', false],
+      ['_resting', isZh ? '休眠中' : 'Resting', (n) => st[n]?.st === 'idle', false],
+      ['_done', isZh ? '已完成' : 'Done', settled, true],
     ]
-    for (const [title, pick] of buckets) {
+    for (const [id, title, pick, isDone] of buckets) {
       const bees = workers.filter(pick)
       if (bees.length > 0) {
         cells.push({
-          id: `_${title.toLowerCase()}`,
+          id,
           title,
           goal: '',
           bees,
           total: bees.length,
-          done: title === 'Done' ? bees.length : 0,
+          done: isDone ? bees.length : 0,
           count: bees.length,
         })
       }
@@ -280,22 +282,28 @@ function buildHiveCells(
   return cells.slice(0, 400)
 }
 
-function statusText(s: HiveBeeState | undefined): string {
+function statusText(s: HiveBeeState | undefined, isZh: boolean): string {
   if (!s) return ''
   switch (s.st) {
-    case 'working': return s.who ? `Working for @${s.who}` : 'Working'
-    case 'wait': return s.who ? `Waiting on @${s.who}` : 'Waiting'
-    case 'needs': return 'Needs attention'
-    case 'issue': return 'Issue / Stuck'
-    case 'done': return 'Done'
-    case 'idle': return 'Resting'
-    case 'retired': return 'Retired'
-    case 'unborn': return 'Not started'
+    case 'working':
+      return s.who
+        ? (isZh ? `协助 @${s.who} 工作中` : `Working for @${s.who}`)
+        : t('members.state.working')
+    case 'wait':
+      return s.who ? t('members.waitingOn', { target: s.who }) : t('members.state.waiting')
+    case 'needs': return isZh ? '需要关注' : 'Needs attention'
+    case 'issue': return isZh ? '异常 / 卡住' : 'Issue / Stuck'
+    case 'done': return isZh ? '已完成' : 'Done'
+    case 'idle': return isZh ? '休眠中' : 'Resting'
+    case 'retired': return t('members.state.killed')
+    case 'unborn': return isZh ? '未启动' : 'Not started'
   }
 }
 
 export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
   const { snapshot, messages, replaySeq, onJumpToSeq } = props
+  const locale = useUiLocale()
+  const isZh = locale === 'zh-CN'
   const rootRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -328,7 +336,7 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
   }, [selectedCellId])
 
   const hs = useMemo(() => computeHiveStates(snapshot, messages, replaySeq), [snapshot, messages, replaySeq])
-  const cells = useMemo(() => buildHiveCells(snapshot, hs.st, hs.doneCheck), [snapshot, hs])
+  const cells = useMemo(() => buildHiveCells(snapshot, hs.st, hs.doneCheck, isZh), [snapshot, hs, isZh])
   const slots = useMemo(() => hiveSlots(cells.length), [cells.length])
   const selCell = useMemo(() => cells.find((c) => c.id === selectedCellId) ?? null, [cells, selectedCellId])
 
@@ -632,20 +640,20 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
     <div ref={rootRef} className="ag-hv" data-testid="swarm-hive" data-size={mode} style={{ position: 'relative' }}>
       <div className="ag-hv-bar" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
         <div style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)', fontVariantNumeric: 'tabular-nums' }}>
-          <strong style={{ color: 'var(--ag-fg, inherit)' }}>{cells.length}</strong> {cells.length === 1 ? 'cell' : 'cells'} · {allDone}/{allTot} done
+          {t('graph.cellsDone', { cells: cells.length, done: allDone, total: allTot })}
         </div>
         <div
           className="ag-hv-zoom"
           role="group"
-          aria-label="Hive zoom controls"
+          aria-label={isZh ? '蜂巢缩放控制' : 'Hive zoom controls'}
           style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 2 }}
         >
           <button
             type="button"
             className="ag-icon-btn"
             disabled={!zoomed}
-            title="Zoom out"
-            aria-label="Zoom out"
+            title={isZh ? '缩小' : 'Zoom out'}
+            aria-label={isZh ? '缩小' : 'Zoom out'}
             onClick={() => setZoom((z) => Math.max(1, z / 1.6))}
           >
             −
@@ -654,8 +662,8 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
             type="button"
             className="ag-icon-btn"
             disabled={clampedZoom > zmax - 0.01}
-            title="Zoom in (or Ctrl+wheel)"
-            aria-label="Zoom in"
+            title={isZh ? '放大（或按住 Ctrl+滚轮）' : 'Zoom in (or Ctrl+wheel)'}
+            aria-label={isZh ? '放大' : 'Zoom in'}
             onClick={() => setZoom((z) => Math.min(zmax, z * 1.6))}
           >
             +
@@ -664,11 +672,11 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
             type="button"
             className="ag-ghost-btn"
             disabled={!zoomed}
-            title="Fit the whole hive"
+            title={isZh ? '适配整个蜂巢' : 'Fit the whole hive'}
             onClick={() => setZoom(1)}
             style={{ height: 26, padding: '0 7px' }}
           >
-            Fit
+            {isZh ? '适配' : 'Fit'}
           </button>
         </div>
       </div>
@@ -720,7 +728,7 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
               {mode === 'full' && (
                 <>
                   <text x={ox} y={oy + R * 0.44} textAnchor="middle" fontSize={12} fontWeight={600} fill="var(--ag-fg, #1d1f21)" style={{ pointerEvents: 'none' }}>
-                    Coordinator
+                    {t('members.coordinator')}
                   </text>
                   <text
                     x={ox}
@@ -730,7 +738,7 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
                     fill={coordNeeds ? 'var(--ag-warning, #bca136)' : 'var(--ag-fg-muted, #5d676f)'}
                     style={{ pointerEvents: 'none' }}
                   >
-                    {coordNeeds ? 'Needs attention' : `${allDone} of ${allTot} done`}
+                    {coordNeeds ? (isZh ? '需要关注' : 'Needs attention') : (isZh ? `完成 ${allDone}/${allTot}` : `${allDone} of ${allTot} done`)}
                   </text>
                 </>
               )}
@@ -743,7 +751,7 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
                   fill={coordNeeds ? 'var(--ag-warning, #bca136)' : 'var(--ag-fg-muted, #5d676f)'}
                   style={{ pointerEvents: 'none' }}
                 >
-                  {coordNeeds ? 'Needs attention' : `${allDone}/${allTot}`}
+                  {coordNeeds ? (isZh ? '需关注' : 'Needs attention') : `${allDone}/${allTot}`}
                 </text>
               )}
             </g>
@@ -892,7 +900,7 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
               const beeSz: 1 | 2 | 3 = p.size === 'q' ? 3 : p.size === 'm' ? 2 : 1
               const beeVisual = st.st === 'working' ? 'working' : st.st === 'wait' ? 'waiting_on' : st.st === 'retired' ? 'killed' : 'landed'
               const dotVar = st.st === 'issue' ? 'stuck' : st.st === 'wait' || st.st === 'needs' ? 'waiting' : st.st === 'done' ? 'done' : undefined
-              const tip = `@${n}${m.task_hint && n !== 'coordinator' ? ` · ${m.task_hint}` : ''} · ${statusText(st)}`
+              const tip = `@${n}${m.task_hint && n !== 'coordinator' ? ` · ${m.task_hint}` : ''} · ${statusText(st, isZh)}`
 
               return (
                 <button
@@ -961,15 +969,15 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
       >
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <i style={{ display: 'inline-block', width: 16, borderTop: '2px solid var(--ag-success, #63984f)' }} />
-          Tasks done
+          {t('graph.legendDone')}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <i style={{ display: 'inline-block', width: 16, borderTop: '2px solid var(--ag-primary, #007acc)' }} />
-          Message sent
+          {t('graph.legendMsg')}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <i style={{ display: 'inline-block', width: 16, borderTop: '2px dashed var(--ag-warning, #bca136)' }} />
-          Waiting on
+          {t('graph.legendWait')}
         </span>
       </div>
 
@@ -995,20 +1003,22 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
               )}
             </div>
             <span style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-              {selCell.count == null && selCell.total ? `${selCell.done} of ${selCell.total} done` : `${selCell.bees.length} bees`}
+              {selCell.count == null && selCell.total
+                ? (isZh ? `已完成 ${selCell.done}/${selCell.total}` : `${selCell.done} of ${selCell.total} done`)
+                : (isZh ? `${selCell.bees.length} 位成员` : `${selCell.bees.length} bees`)}
             </span>
             <button
               type="button"
               className="ag-icon-btn"
               onClick={() => setSelectedCellId(null)}
-              aria-label="Close cell details"
+              aria-label={t('common.close')}
             >
               ✕
             </button>
           </div>
           {selCell.bees.length === 0 ? (
             <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)' }}>
-              No members assigned to this cell yet.
+              {isZh ? '该工作区暂未分配成员。' : 'No members assigned to this cell yet.'}
             </p>
           ) : (
             <ul style={{ listStyle: 'none', margin: '10px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1054,7 +1064,7 @@ export function HiveCanvas(props: HiveCanvasProps): JSX.Element {
                         )}
                       </span>
                       <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--ag-fg-muted, #5d676f)', whiteSpace: 'nowrap' }}>
-                        {statusText(st)}
+                        {statusText(st, isZh)}
                       </span>
                     </button>
                   </li>

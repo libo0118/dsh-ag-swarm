@@ -1,4 +1,4 @@
-import type { BoardMessage, MemberRecord, MemberTranscriptPayload, SwarmConfig, WorkspaceMode } from '../shared/protocol.js';
+import type { BoardMessage, MemberRecord, MemberTranscriptPayload, RoleModelMap, SwarmConfig, WorkspaceMode } from '../shared/protocol.js';
 import type { SwarmState, SwarmStore } from '../core/store.js';
 import type { HostAgentLike, PluginContextLike } from '../types/dsh-host.js';
 export interface AddWorkersInput {
@@ -14,6 +14,7 @@ export interface AddWorkersInput {
     model?: string;
     provider?: string;
     reasoning_effort?: string;
+    role_preset?: string;
     signal?: AbortSignal;
 }
 export interface WaitBoardInput {
@@ -58,8 +59,15 @@ export declare class WorkerPool {
     private readonly pendingWakeups;
     private readonly eventDisposers;
     private readonly lifetime;
+    private readonly modelPresets;
     private disposed;
     constructor(ctx: PluginContextLike, store: SwarmStore, config: SwarmConfig);
+    getModelPresets(): RoleModelMap;
+    setModelPresets(next: unknown): RoleModelMap;
+    getModelCatalogWithPresets(): {
+        models: CatalogModelInfo[];
+        role_presets: RoleModelMap;
+    };
     private rebuildSessionIndex;
     private installHostListeners;
     ensureSwarmForSession(sessionId: string, title?: string, baseWorkspace?: string): SwarmState;

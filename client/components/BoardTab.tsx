@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardMessage, MemberRecord, SwarmSnapshotPayload, UiActionRequest } from '../../src/shared/protocol'
 import { getBeeDataUrl, getBeeTileBg } from '../bee-sprites'
+import { t, useUiLocale } from '../i18n'
 
 export interface JumpTarget {
   seq: number
@@ -341,7 +342,7 @@ function FeedMessageRow({
           aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
         >
-          {expanded ? 'Show less' : 'Show more'}
+          {expanded ? t('common.showLess') : t('common.showMore')}
         </button>
       )}
     </article>
@@ -356,6 +357,8 @@ export function BoardTab({
   onLoadEarlier,
   loadingEarlier,
 }: BoardTabProps): JSX.Element {
+  const locale = useUiLocale()
+  const zh = locale === 'zh-CN'
   const [search, setSearch] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [fromAgent, setFromAgent] = useState('')
@@ -535,8 +538,8 @@ export function BoardTab({
             </svg>
             <input
               type="search"
-              placeholder="Search board posts…"
-              aria-label="Search board posts"
+              placeholder={t('board.search')}
+              aria-label={t('board.search')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -546,7 +549,7 @@ export function BoardTab({
             type="button"
             className={`ag-icon-btn ag-filter-toggle ${filtersOpen ? 'open' : ''}`}
             aria-expanded={filtersOpen}
-            title={activeFilters ? 'Filters (active)' : 'Filters'}
+            title={activeFilters ? `${t('board.filter')} (${zh ? '已启用' : 'active'})` : t('board.filter')}
             onClick={() => setFiltersOpen((v) => !v)}
           >
             <svg className="ag-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -555,10 +558,10 @@ export function BoardTab({
             {activeFilters && <span className="ag-filter-dot" aria-hidden="true" />}
           </button>
 
-          <label className="ag-switch" title="Auto-scroll to latest posts">
+          <label className="ag-switch" title={zh ? '有新动态时自动滚到底部' : 'Auto-scroll to latest posts'}>
             <input type="checkbox" checked={follow} onChange={(e) => { setFollow(e.target.checked); if (e.target.checked) scrollToBottom('smooth') }} />
             <span className="ag-switch-track" aria-hidden="true" />
-            <span>Follow</span>
+            <span>{t('board.follow')}</span>
           </label>
         </div>
 
@@ -567,30 +570,30 @@ export function BoardTab({
             <div className="ag-toolbar-row">
               <span className="ag-select">
                 <select
-                  aria-label="Filter by sender"
+                  aria-label={t('board.from')}
                   className={fromAgent ? 'set' : ''}
                   value={fromAgent}
                   onChange={(e) => setFromAgent(e.target.value)}
                 >
-                  <option value="">From anyone</option>
+                  <option value="">{t('board.from')}：{t('common.all')}</option>
                   {posters.map((n) => (
-                    <option key={n} value={n}>From @{n}</option>
+                    <option key={n} value={n}>{t('board.from')} @{n}</option>
                   ))}
                 </select>
               </span>
 
               <span className="ag-select">
                 <select
-                  aria-label="Filter by recipient"
+                  aria-label={t('board.to')}
                   className={toAgent ? 'set' : ''}
                   value={toAgent}
                   onChange={(e) => setToAgent(e.target.value)}
                 >
-                  <option value="">To anyone</option>
-                  <option value="@none">To no one</option>
-                  <option value="@all">To @all</option>
+                  <option value="">{t('board.to')}：{t('common.all')}</option>
+                  <option value="@none">{zh ? '无 @提及' : 'To no one'}</option>
+                  <option value="@all">{zh ? '提及 @all' : 'To @all'}</option>
                   {roster.map((m) => (
-                    <option key={m.name} value={m.name}>To @{m.name}</option>
+                    <option key={m.name} value={m.name}>{t('board.to')} @{m.name}</option>
                   ))}
                 </select>
               </span>
@@ -598,16 +601,16 @@ export function BoardTab({
               {hasChannels && (
                 <span className="ag-select">
                   <select
-                    aria-label="Filter by channel"
+                    aria-label={t('board.channel')}
                     className={channel ? 'set' : ''}
                     value={channel}
                     onChange={(e) => setChannel(e.target.value)}
                   >
-                    <option value="">All channels</option>
+                    <option value="">{t('board.channel')}：{t('common.all')}</option>
                     <option value="main">#main</option>
                     {channelsList.map((c) => (
                       <option key={c.name} value={c.name}>
-                        #{c.name}{c.archived ? ' (archived)' : ''}
+                        #{c.name}{c.archived ? (zh ? '（已归档）' : ' (archived)') : ''}
                       </option>
                     ))}
                   </select>
@@ -626,13 +629,13 @@ export function BoardTab({
                     setHiddenAgents(new Set())
                   }}
                 >
-                  Clear filters
+                  {zh ? '清除筛选' : 'Clear filters'}
                 </button>
               )}
             </div>
 
             {roster.length > 0 && (
-              <div className="ag-agents" role="group" aria-label="Toggle members in feed">
+              <div className="ag-agents" role="group" aria-label={zh ? '按成员显示或隐藏' : 'Toggle members in feed'}>
                 {roster.map((m) => {
                   const hidden = hiddenAgents.has(m.name)
                   return (
@@ -655,7 +658,7 @@ export function BoardTab({
         )}
 
         {hasChannels && (
-          <div className="ag-channel-tabs" role="tablist" aria-label="Board channels">
+          <div className="ag-channel-tabs" role="tablist" aria-label={t('board.channel')}>
             <button
               type="button"
               role="tab"
@@ -664,7 +667,7 @@ export function BoardTab({
               data-testid="swarm-channel-tab"
               onClick={() => setChannel('')}
             >
-              All
+              {t('common.all')}
             </button>
             <button
               type="button"
@@ -705,15 +708,19 @@ export function BoardTab({
               onClick={() => { void onLoadEarlier() }}
             >
               {loadingEarlier
-                ? `Loading earlier posts… (${snapshot.messagesOffset} older)`
-                : `Show earlier posts (${snapshot.messagesOffset} older)`}
+                ? (zh ? `正在加载更早发言…（还有 ${snapshot.messagesOffset} 条）` : `Loading earlier posts… (${snapshot.messagesOffset} older)`)
+                : `${t('board.showEarlier')} (${snapshot.messagesOffset})`}
             </button>
           </div>
         )}
 
         {visibleMessages.length === 0 ? (
           <div className="ag-feed-empty">
-            <div>{anyFilter ? 'No posts match the current filters.' : 'No messages posted to the board yet.'}</div>
+            <div>
+              {anyFilter
+                ? (zh ? '当前筛选条件下暂无匹配发言。' : 'No posts match the current filters.')
+                : (zh ? '黑板上暂无发言。' : 'No messages posted to the board yet.')}
+            </div>
             {anyFilter && (
               <button
                 type="button"
@@ -726,7 +733,7 @@ export function BoardTab({
                   setHiddenAgents(new Set())
                 }}
               >
-                Reset filters
+                {zh ? '重置筛选' : 'Reset filters'}
               </button>
             )}
           </div>
@@ -760,7 +767,7 @@ export function BoardTab({
               scrollToBottom('smooth')
             }}
           >
-            ↓ Latest
+            ↓ {t('board.latest')}
           </button>
         </div>
       )}
@@ -772,8 +779,8 @@ export function BoardTab({
           aria-expanded={composerOpen}
           onClick={() => setComposerOpen((v) => !v)}
         >
-          <span>Post to #{draftChannel || 'main'} or @mention a member…</span>
-          <span>{composerOpen ? '▾ Hide' : '▴ Compose'}</span>
+          <span>{t('board.composePlaceholder', { channel: draftChannel || 'main' })}</span>
+          <span>{composerOpen ? `▾ ${t('common.showLess')}` : `▴ ${t('board.composeBtn')}`}</span>
         </button>
 
         {composerOpen && (
@@ -781,7 +788,7 @@ export function BoardTab({
             <div className="ag-composer-top">
               <span className="ag-select">
                 <select
-                  aria-label="Target channel"
+                  aria-label={t('board.channel')}
                   value={draftChannel}
                   onChange={(e) => setDraftChannel(e.target.value)}
                 >
@@ -813,7 +820,7 @@ export function BoardTab({
             </div>
 
             <textarea
-              placeholder="Write a board message… (Ctrl+Enter to send)"
+              placeholder={zh ? '输入黑板发言内容…（Ctrl+Enter 快捷发送）' : 'Write a board message… (Ctrl+Enter to send)'}
               value={draftText}
               onChange={(e) => setDraftText(e.target.value)}
               onKeyDown={(e) => {
@@ -825,14 +832,14 @@ export function BoardTab({
             />
 
             <div className="ag-composer-foot">
-              <span>Posting wakes mentioned waiting agents immediately.</span>
+              <span>{zh ? '发帖会立即唤醒被 @提及 的待命成员。' : 'Posting wakes mentioned waiting agents immediately.'}</span>
               <button
                 type="button"
                 className="ag-btn primary sm"
                 disabled={sending || !draftText.trim()}
                 onClick={() => { void handleSend() }}
               >
-                {sending ? 'Sending…' : 'Send'}
+                {sending ? (zh ? '发送中…' : 'Sending…') : t('board.send')}
               </button>
             </div>
           </div>

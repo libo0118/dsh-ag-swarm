@@ -6,5 +6,6 @@ export declare const AG_SWARM_ROUTE_PREFIX = "/ag-swarm";
 export interface SwarmRoutesOptions {
     config?: SwarmConfig;
     getWaitToolName?: () => string;
+    getPrimaryCommand?: () => string;
 }
 export declare function registerSwarmRoutes(ctx: PluginContextLike, store: SwarmStore, pool: WorkerPool, options?: SwarmRoutesOptions): () => void;

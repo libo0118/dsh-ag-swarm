@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, isAbsolute, resolve } from 'node:path'
 import { resolveSwarmConfig } from './config.js'
-import type { PlanFile, SseEventPayload, SwarmConfig, UiActionRequest } from './shared/protocol.js'
+import type { ConfigPayload, PlanFile, SseEventPayload, SwarmConfig, UiActionRequest } from './shared/protocol.js'
 import { buildSnapshot } from './core/projection.js'
 import type { SwarmStore, SwarmUpdateEvent } from './core/store.js'
 import { admitHttpRequest } from './runtime/dsh-adapter.js'
@@ -385,6 +385,7 @@ async function handleUiAction(
 export interface SwarmRoutesOptions {
   config?: SwarmConfig
   getWaitToolName?: () => string
+  getPrimaryCommand?: () => string
 }
 
 export function registerSwarmRoutes(
@@ -421,7 +422,7 @@ export function registerSwarmRoutes(
             sendJson(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
             return
           }
-          sendJson(res, 200, {
+          const payload: ConfigPayload = {
             storageDir: resolvedConfig.storageDir,
             maxWorkers: resolvedConfig.maxWorkers,
             maxDepth: resolvedConfig.maxDepth,
@@ -430,7 +431,30 @@ export function registerSwarmRoutes(
             enableWorktrees: resolvedConfig.enableWorktrees,
             registerSwarmCommandAlias: resolvedConfig.registerSwarmCommandAlias,
             waitToolName: options?.getWaitToolName?.() ?? 'swarm_wait',
-          })
+            primaryCommand:
+              options?.getPrimaryCommand?.() ?? (resolvedConfig.registerSwarmCommandAlias ? 'swarm' : 'ag-swarm'),
+            modelPresets: pool.getModelPresets(),
+          }
+          sendJson(res, 200, payload)
+          return
+        }
+
+        if (pathname === `${AG_SWARM_ROUTE_PREFIX}/api/model-presets`) {
+          if (method === 'GET') {
+            sendJson(res, 200, { ok: true, modelPresets: pool.getModelPresets() })
+            return
+          }
+          if (method === 'POST') {
+            const body = await readJsonBody(req)
+            const raw = 'modelPresets' in body ? body.modelPresets : 'presets' in body ? body.presets : undefined
+            if (raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+              throw new HttpError(400, 'modelPresets object is required')
+            }
+            const modelPresets = pool.setModelPresets(raw)
+            sendJson(res, 200, { ok: true, modelPresets })
+            return
+          }
+          sendJson(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
           return
         }
 

@@ -17,6 +17,7 @@ export type { SwarmConfig }
 
 export { SwarmStore } from './core/store.js'
 export { buildSnapshot } from './core/projection.js'
+export { ModelPresetStore, resolveModelForWorker, sanitizeRoleModelMap } from './core/model-presets.js'
 export * from './core/channels.js'
 export { WorkerPool } from './runtime/worker-pool.js'
 export { SwarmStallMonitor } from './runtime/stall-monitor.js'
@@ -128,6 +129,7 @@ export function apply(ctx: Context, rawConfig?: Partial<SwarmConfig>): void {
   })
 
   let waitToolName = 'swarm_wait'
+  let primaryCommand = config.registerSwarmCommandAlias ? 'swarm' : 'ag-swarm'
   hostCtx.effect(() =>
     wireWhenAvailable(hostCtx, 'tools', () => {
       const handle = registerSwarmTools(hostCtx, store, pool)
@@ -135,11 +137,21 @@ export function apply(ctx: Context, rawConfig?: Partial<SwarmConfig>): void {
       return handle.dispose
     }),
   )
-  hostCtx.effect(() => wireWhenAvailable(hostCtx, 'commands', () => registerSwarmCommand(hostCtx, store, pool, config)))
+  hostCtx.effect(() =>
+    wireWhenAvailable(hostCtx, 'commands', () => {
+      const handle = registerSwarmCommand(hostCtx, store, pool, config)
+      primaryCommand = handle.primaryCommand
+      return handle.dispose
+    }),
+  )
   hostCtx.effect(() => wireWhenAvailable(hostCtx, 'skills', () => registerSwarmSkills(hostCtx)))
   hostCtx.effect(() =>
     wireWhenAvailable(hostCtx, 'webServer', () =>
-      registerSwarmRoutes(hostCtx, store, pool, { config, getWaitToolName: () => waitToolName }),
+      registerSwarmRoutes(hostCtx, store, pool, {
+        config,
+        getWaitToolName: () => waitToolName,
+        getPrimaryCommand: () => primaryCommand,
+      }),
     ),
   )
 }

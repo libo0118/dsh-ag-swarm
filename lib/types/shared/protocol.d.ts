@@ -261,3 +261,17 @@ export interface SseEventPayload {
     etag?: string;
     reason?: string;
 }
+export declare const BUILTIN_MODEL_ROLES: readonly ["default", "explorer", "author", "verifier", "monitor"];
+export type BuiltinModelRole = (typeof BUILTIN_MODEL_ROLES)[number];
+export interface RoleModelPreset {
+    provider?: string;
+    model: string;
+    reasoningEffort?: string;
+    label?: string;
+}
+export type RoleModelMap = Record<string, RoleModelPreset>;
+export interface ConfigPayload extends SwarmConfig {
+    waitToolName: string;
+    primaryCommand: string;
+    modelPresets: RoleModelMap;
+}

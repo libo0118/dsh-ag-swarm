@@ -34,22 +34,22 @@ Antigravity-style multi-agent Swarm plugin for **DeepSeek Harness (DSH `0.2.2-rc
    - DSH's sidebar displays the active working spinner strictly when `ctx.agents.get(sessionId)?.status === "running"`.
    - **`coordinator`** calling `swarm_wait`: holds the tool Promise open at **0 LLM token burn** while listening to `store.on('update')`, `agent/inbox/inserted` (user steering), and `AbortSignal`, resolving as soon as `@coordinator`, `@all`, user input, or all-workers-idle occurs.
    - **`worker`** calling `swarm_wait`: immediately parks at `waiting` (zero tokens) and wakes via `agent.steer(...)` when `@name` / `@all` / `@#channel` rings its doorbell.
-4. **Collision-Safe Registration**
-   - If another plugin (such as `dsh-swarm-orchestrator`) already registered `swarm_wait`, `dsh-ag-swarm` automatically falls back to `ag_swarm_wait` without crashing host boot.
-   - Slash command defaults to `/ag-swarm` (`/swarm` alias disabled by default in `cordis.patch.yml`).
+4. **Collision-Safe Registration & Role Model Presets**
+   - Registers `/swarm` as the primary slash command (with `/ag-swarm` fallback alias; safely skips if `/swarm` is already claimed), and falls back from `swarm_wait` to `ag_swarm_wait` if another plugin occupies `swarm_wait`.
+   - **Settings UI Role Model Presets (`设置 → 蜂群设置 → 按角色定制模型`)**: Customize Provider, Model, and Reasoning Effort per built-in role (`default`, `explorer`, `author`, `verifier`, `monitor`) or any custom role in the UI (persisted to `<storageDir>/model-presets.json`), and automatically applied when spawning workers (`explicitModel > role_preset > custom role > worker-name heuristic > default > inherit`).
 
 ---
 
-## Tools, Commands & Web UI
+## Tools, Commands & Web UI (默认简体中文 + `EN / 中文` 切换)
 
-- **Model Tools**: `swarm` (`title`, `add`, `status`, `models`, `model`, `kill`, `channel`, `plan`), `post_message`, `read_board`, `swarm_wait` (or `ag_swarm_wait`).
-- **Slash Command**: `/ag-swarm <goal | status | models | kill <name> | plan | help>`
+- **Model Tools**: `swarm` (`title`, `add` with `role_preset`, `status`, `models`, `model`, `kill`, `channel`, `plan`), `post_message`, `read_board`, `swarm_wait` (or `ag_swarm_wait`).
+- **Slash Command**: `/swarm <goal | status | title <t> | add <name> <brief> | post <msg> | kill <name> | help>` (`/ag-swarm` alias supported)
 - **Virtual Skills**: `ag-swarm-coordinator`, `ag-swarm-worker`
-- **Web UI Slots (`client/index.ts`)**:
-  - `conversation.view` (`Swarm`): **Overview** (Goal, Running, Progress Ring, Progress Reel + `Compare with now`, Threads, Team, Stall banner), **Board** (channels, filters, `#seq` jump pills, Composer), **Members** (+ Inspector Drawer with transcript, Model Switch, Nudge, Kill), **Graph** (`Hive` hex canvas + `Mentions` SVG + timeline replay + GIF89a export), **Raw** (`swarm.json` / `members.json` / `board.jsonl` / `plan.json`).
-  - `conversation.session.header.actions`: Pixel-bee status pill + live roster popover.
-  - `tool.call.toolview` (`swarm`): Compact inline dispatch/action card.
-  - `settings.section` (`Hive Swarm`): Live SSE status, active swarms list, plugin config summary.
+- **Web UI Slots (`client/index.ts`, 默认简体中文，右上角支持切换中/英文)**:
+  - `conversation.view` (`蜂群` / `Swarm`): **总览 (Overview)**、**黑板 (Board)**、**成员 (Members + 抽屉切模/Nudge/Kill)**、**图谱 (Hive 蜂巢 + Mentions 网络 + GIF89a 导出)**、**原始数据 (Raw)**。
+  - `conversation.session.header.actions`: 顶栏像素蜜蜂状态胶囊。
+  - `tool.call.toolview` (`swarm`): 紧凑工具调度卡片。
+  - `settings.section` (`蜂群设置` / `Hive Swarm`): 实时 SSE 状态、活跃蜂群列表、**按角色定制模型**面板、插件运行参数。
 
 ---
 

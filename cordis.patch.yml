@@ -11,4 +11,4 @@
         stallCheckIntervalMs: 180000
         enableStallMonitor: true
         enableWorktrees: true
-        registerSwarmCommandAlias: false
+        registerSwarmCommandAlias: true

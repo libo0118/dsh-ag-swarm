@@ -3,6 +3,7 @@ import type {
   BoardMessage,
   MemberRecord,
   MemberTranscriptPayload,
+  RoleModelMap,
   SwarmConfig,
   TranscriptStepView,
   WorkspaceMode,
@@ -14,6 +15,7 @@ import {
   isKilled,
   MAIN_CHANNEL,
 } from '../core/channels.js'
+import { ModelPresetStore, resolveModelForWorker } from '../core/model-presets.js'
 import type { SwarmState, SwarmStore } from '../core/store.js'
 import type {
   HostAgentLike,
@@ -43,6 +45,7 @@ export interface AddWorkersInput {
   model?: string
   provider?: string
   reasoning_effort?: string
+  role_preset?: string
   signal?: AbortSignal
 }
 
@@ -152,6 +155,7 @@ export class WorkerPool {
   private readonly pendingWakeups = new Map<string, PendingWakeup[]>()
   private readonly eventDisposers: Array<() => void> = []
   private readonly lifetime = new AbortController()
+  private readonly modelPresets: ModelPresetStore
   private disposed = false
 
   constructor(
@@ -159,8 +163,24 @@ export class WorkerPool {
     private readonly store: SwarmStore,
     private readonly config: SwarmConfig,
   ) {
+    this.modelPresets = new ModelPresetStore(config.storageDir)
     this.rebuildSessionIndex()
     this.installHostListeners()
+  }
+
+  getModelPresets(): RoleModelMap {
+    return this.modelPresets.getAll()
+  }
+
+  setModelPresets(next: unknown): RoleModelMap {
+    return this.modelPresets.setAll(next)
+  }
+
+  getModelCatalogWithPresets(): { models: CatalogModelInfo[]; role_presets: RoleModelMap } {
+    return {
+      models: this.listModels(),
+      role_presets: this.modelPresets.getAll(),
+    }
   }
 
   private rebuildSessionIndex(): void {
@@ -463,6 +483,7 @@ export class WorkerPool {
           model: input.model,
           provider: input.provider,
           reasoningEffort: input.reasoning_effort,
+          rolePreset: input.role_preset,
           forkSeed,
           signal: input.signal,
         }),
@@ -483,6 +504,7 @@ export class WorkerPool {
     model?: string
     provider?: string
     reasoningEffort?: string
+    rolePreset?: string
     forkSeed?: { seed: unknown[]; inheritedEventCount: number }
     signal?: AbortSignal
   }): Promise<MemberRecord> {
@@ -500,8 +522,19 @@ export class WorkerPool {
     })
 
     const sessionId = `agw-${swarm.swarm_id.slice(-8)}-${workerName}-${randomUUID().slice(0, 6)}`
-    const modelName = params.model || swarm.members[params.callerName]?.model || 'default'
-    const providerName = params.provider || swarm.members[params.callerName]?.provider
+    const resolvedModel = resolveModelForWorker({
+      explicitModel: params.model,
+      explicitProvider: params.provider,
+      explicitEffort: params.reasoningEffort,
+      rolePreset: params.rolePreset,
+      workerName,
+      presets: this.modelPresets.getAll(),
+    })
+    const callerMember = swarm.members[params.callerName]
+    const modelName = resolvedModel?.model || callerMember?.model || 'default'
+    const providerName = resolvedModel?.provider || params.provider || callerMember?.provider
+    const reasoningEffort = resolvedModel?.reasoningEffort || params.reasoningEffort || callerMember?.reasoning_effort
+    const modelDisplayName = resolvedModel?.label || modelName
 
     const member = this.store.addMember(swarm.swarm_id, {
       name: workerName,
@@ -510,8 +543,8 @@ export class WorkerPool {
       state: 'working',
       model: modelName,
       provider: providerName,
-      model_display_name: modelName,
-      reasoning_effort: params.reasoningEffort,
+      model_display_name: modelDisplayName,
+      reasoning_effort: reasoningEffort,
       workspace_mode: prepared.mode,
       workspace: prepared.workspace,
       branch: prepared.branch,
@@ -539,10 +572,11 @@ export class WorkerPool {
       brief,
     ].join('\n')
 
+    const effectiveModelForOptions = resolvedModel?.model
     const agentOptions: Record<string, unknown> = {
       ...(providerName ? { provider: providerName } : {}),
-      ...(params.model ? { model: params.model } : {}),
-      ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {}),
+      ...(effectiveModelForOptions ? { model: effectiveModelForOptions } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
     }
 
     const agents = this.ctx.get<HostAgentsLike>('agents')

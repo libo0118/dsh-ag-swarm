@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { PixelBee } from '../bee-sprites'
+import { t, useUiLocale } from '../i18n'
 
 interface ToolCardProps {
   toolCall?: {
@@ -22,6 +23,7 @@ interface ParsedSwarmInput {
   model?: string
   provider?: string
   reasoning_effort?: string
+  role_preset?: string
   workspace?: string
   fork?: string
   n?: number
@@ -92,20 +94,22 @@ function resolveStatus(props: ToolCardProps): 'running' | 'ok' | 'error' {
   return 'ok'
 }
 
-function actionLabel(action: string | undefined): string {
+function actionLabel(action: string | undefined, isZh: boolean): string {
   switch (action) {
-    case 'add': return 'Spawn worker'
-    case 'status': return 'Swarm status'
-    case 'models': return 'List models'
-    case 'model': return 'Switch model'
-    case 'kill': return 'Retire worker'
-    case 'title': return 'Set swarm title'
-    case 'channel': return 'Channel ops'
-    default: return action ? `swarm:${action}` : 'Swarm action'
+    case 'add': return isZh ? '派发子代理' : 'Spawn worker'
+    case 'status': return isZh ? '查看蜂群状态' : 'Swarm status'
+    case 'models': return isZh ? '查询模型目录' : 'List models'
+    case 'model': return isZh ? '切换模型' : 'Switch model'
+    case 'kill': return isZh ? '终止成员' : 'Retire worker'
+    case 'title': return isZh ? '设置蜂群标题' : 'Set swarm title'
+    case 'channel': return isZh ? '频道操作' : 'Channel ops'
+    default: return action ? t('tool.title', { action }) : (isZh ? '蜂群调度' : 'Swarm action')
   }
 }
 
 export function ToolCard(props: ToolCardProps): JSX.Element {
+  const locale = useUiLocale()
+  const isZh = locale === 'zh-CN'
   const [expanded, setExpanded] = useState(false)
   const input = extractInput(props)
   const outputText = extractOutputText(props)
@@ -124,13 +128,14 @@ export function ToolCard(props: ToolCardProps): JSX.Element {
     else if (copies > 1) tags.push(`@${workerName}-1..${copies}`)
     else tags.push(`@${workerName}`)
   }
+  if (input.role_preset) tags.push(`role:${input.role_preset}`)
   if (input.model) tags.push(input.provider ? `${input.provider}/${input.model}` : input.model)
   if (input.reasoning_effort) tags.push(`effort:${input.reasoning_effort}`)
   if (input.workspace) tags.push(`workspace:${input.workspace}`)
   if (input.fork) tags.push(`fork:${input.fork}`)
   if (input.channel) tags.push(`#${input.channel}`)
-  if (tasksCount > 0) tags.push(`${tasksCount} shards`)
-  if (input.all) tags.push('all models')
+  if (tasksCount > 0) tags.push(isZh ? `${tasksCount} 分片` : `${tasksCount} shards`)
+  if (input.all) tags.push(isZh ? '全部模型' : 'all models')
 
   const preview = input.title || input.brief || input.topic || input.text || ''
   const statusColor = status === 'error'
@@ -154,7 +159,7 @@ export function ToolCard(props: ToolCardProps): JSX.Element {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
         <PixelBee name={beeName} role={beeRole} state={status === 'running' ? 'working' : 'landed'} size={1} />
-        <span style={{ fontWeight: 600, fontSize: 'var(--ag-text-sm, 13px)' }}>{actionLabel(action)}</span>
+        <span style={{ fontWeight: 600, fontSize: 'var(--ag-text-sm, 13px)' }}>{actionLabel(action, isZh)}</span>
         <span
           className={`ag-tc-status ag-tc-${status}`}
           style={{
@@ -168,7 +173,11 @@ export function ToolCard(props: ToolCardProps): JSX.Element {
           }}
         >
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor, display: 'inline-block' }} />
-          {status === 'running' ? 'Running' : status === 'error' ? 'Error' : 'Done'}
+          {status === 'running'
+            ? (isZh ? '执行中' : 'Running')
+            : status === 'error'
+              ? (isZh ? '出错' : 'Error')
+              : (isZh ? '已完成' : 'Done')}
         </span>
       </div>
       {tags.length > 0 && (
@@ -221,7 +230,7 @@ export function ToolCard(props: ToolCardProps): JSX.Element {
               cursor: 'pointer',
             }}
           >
-            {expanded ? 'Hide details' : 'Show details'}
+            {expanded ? t('tool.hideDetails') : t('tool.showDetails')}
           </button>
           {expanded && (
             <pre

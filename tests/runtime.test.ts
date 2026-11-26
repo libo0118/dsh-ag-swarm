@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolveSwarmConfig } from '../src/config.js'
+import { ModelPresetStore, resolveModelForWorker, sanitizeRoleModelMap } from '../src/core/model-presets.js'
 import { SwarmStore } from '../src/core/store.js'
 import {
   detectHostCapabilities,
@@ -583,7 +584,8 @@ describe('Tools conflict fallback, Commands, Skills, StallMonitor & HTTP/SSE rou
     expect(ctx.registeredTools.has('ag_swarm_wait')).toBe(true)
     expect(ctx.registeredTools.has('swarm')).toBe(true)
 
-    const disposeCmd = registerSwarmCommand(ctx, store, pool, config)
+    const cmdHandle = registerSwarmCommand(ctx, store, pool, config)
+    expect(cmdHandle.primaryCommand).toBe('ag-swarm')
     expect(ctx.registeredCommands.has('ag-swarm')).toBe(true)
     expect(ctx.registeredCommands.has('swarm')).toBe(false)
     const cmdRes = await ctx.registeredCommands.get('ag-swarm').handler({ rawInput: 'build dashboard', agent: { id: 'cmd-sess' } })
@@ -595,7 +597,7 @@ describe('Tools conflict fallback, Commands, Skills, StallMonitor & HTTP/SSE rou
     expect(ctx.registeredSkills.has('ag-swarm-worker')).toBe(true)
 
     disposeSkills()
-    disposeCmd()
+    cmdHandle.dispose()
     toolsHandle.dispose()
     await pool.dispose()
   })
@@ -726,6 +728,168 @@ describe('Tools conflict fallback, Commands, Skills, StallMonitor & HTTP/SSE rou
     expect(store.listenerCount('update')).toBeLessThan(listenersDuringSse)
 
     disposeRoutes()
+    await pool.dispose()
+  })
+})
+
+describe('Role model presets persistence, resolution precedence & /swarm primary command', () => {
+  it('sanitizes, persists ModelPresetStore and resolves worker models in exact 6-level priority', () => {
+    const storageDir = makeTempDir('ag-presets-store-')
+    const store1 = new ModelPresetStore(storageDir)
+    expect(store1.getAll()).toEqual({})
+
+    const saved = store1.setAll({
+      '  Explorer ': { provider: ' deepseek ', model: ' deepseek-chat ', reasoningEffort: ' low ' },
+      author: { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' },
+      verifier: { model: 'claude-opus' },
+      frontend: { provider: 'openai', model: 'gpt-5', reasoningEffort: 'medium' },
+      default: { provider: 'deepseek', model: 'deepseek-default' },
+      empty: { model: '   ' },
+      'INVALID KEY!': { model: 'ignored' },
+    })
+    expect(Object.keys(saved).sort()).toEqual(['author', 'default', 'explorer', 'frontend', 'verifier'])
+    expect(saved.explorer).toEqual({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'low' })
+    expect(sanitizeRoleModelMap(null)).toEqual({})
+
+    // Reload from disk verifies persistence
+    const store2 = new ModelPresetStore(storageDir)
+    const presets = store2.getAll()
+    expect(presets.frontend?.model).toBe('gpt-5')
+
+    // 1) Explicit model overrides everything
+    expect(
+      resolveModelForWorker({ explicitModel: 'manual-m', rolePreset: 'explorer', workerName: 'frontend-dev', presets })?.model,
+    ).toBe('manual-m')
+
+    // 2) Explicit rolePreset wins over name match
+    const r2 = resolveModelForWorker({ rolePreset: 'verifier', workerName: 'frontend-dev', presets })
+    expect(r2?.model).toBe('claude-opus')
+    expect(r2?.source).toBe('role_preset')
+
+    // 3) Custom preset key segment match (frontend-dev -> frontend)
+    const r3 = resolveModelForWorker({ workerName: 'frontend-dev', presets })
+    expect(r3?.model).toBe('gpt-5')
+    expect(r3?.source).toBe('name_match')
+
+    // 4) Semantic inference of built-in role (repo-scout -> explorer, qa-runner -> verifier, api-builder -> author)
+    expect(resolveModelForWorker({ workerName: 'repo-scout', presets })?.model).toBe('deepseek-chat')
+    expect(resolveModelForWorker({ workerName: 'qa-runner', presets })?.model).toBe('claude-opus')
+    expect(resolveModelForWorker({ workerName: 'api-builder', presets })?.model).toBe('deepseek-reasoner')
+
+    // 5) Fallback to default preset
+    const r5 = resolveModelForWorker({ workerName: 'misc-task', presets })
+    expect(r5?.model).toBe('deepseek-default')
+    expect(r5?.source).toBe('default')
+
+    // 6) Undefined when no preset matches and no default configured
+    expect(resolveModelForWorker({ workerName: 'misc-task', presets: { explorer: { model: 'x' } } })).toBeUndefined()
+  })
+})
+
+describe('/swarm primary command, WorkerPool presets & /api/model-presets routes', () => {
+  it('registers /swarm as primary command by default (with /ag-swarm alias) and falls back cleanly on conflict', async () => {
+    const storageDir = makeTempDir('ag-cmd-store-')
+    const cwd = makeTempDir('ag-cmd-cwd-')
+    const ctx1 = new MockHostContext(cwd)
+    const store = new SwarmStore(storageDir)
+    const defaultCfg = resolveSwarmConfig({ storageDir })
+    expect(defaultCfg.registerSwarmCommandAlias).toBe(true)
+
+    const pool = new WorkerPool(ctx1, store, defaultCfg)
+    const h1 = registerSwarmCommand(ctx1, store, pool, defaultCfg)
+    expect(h1.primaryCommand).toBe('swarm')
+    expect(ctx1.registeredCommands.has('swarm')).toBe(true)
+    expect(ctx1.registeredCommands.has('ag-swarm')).toBe(true)
+    h1.dispose()
+
+    // Conflict: another plugin already claimed /swarm -> falls back to primaryCommand='ag-swarm'
+    const ctx2 = new MockHostContext(cwd)
+    ctx2.registeredCommands.set('swarm', { name: 'swarm' })
+    const h2 = registerSwarmCommand(ctx2, store, pool, defaultCfg)
+    expect(h2.primaryCommand).toBe('ag-swarm')
+    expect(ctx2.registeredCommands.has('ag-swarm')).toBe(true)
+    h2.dispose()
+    await pool.dispose()
+  })
+
+  it('persists role presets via /ag-swarm/api/model-presets, exposes them in /api/config, and applies them in addWorkers', async () => {
+    const storageDir = makeTempDir('ag-preset-http-')
+    const cwd = makeTempDir('ag-preset-cwd-')
+    const ctx = new MockHostContext(cwd)
+    const coord = new MockAgent('coord-p1', cwd)
+    ctx.agentsMap.set(coord.id, coord)
+
+    const store = new SwarmStore(storageDir)
+    const config = resolveSwarmConfig({ storageDir, enableWorktrees: false })
+    const pool = new WorkerPool(ctx, store, config)
+    const cmdHandle = registerSwarmCommand(ctx, store, pool, config)
+    const disposeRoutes = registerSwarmRoutes(ctx, store, pool, {
+      config,
+      getPrimaryCommand: () => cmdHandle.primaryCommand,
+    })
+    const handler = ctx.routeHandler!
+
+    // Unauthenticated POST rejected
+    ctx.admitResult = { rejection: 401 }
+    const unauth = createMockRes()
+    await handler(createMockReq('POST', '/ag-swarm/api/model-presets', { modelPresets: { explorer: { model: 'm1' } } }), unauth.res)
+    expect(unauth.status).toBe(401)
+
+    // Authenticated POST saves presets
+    ctx.admitResult = { peer: { id: 'p1' } }
+    const postRes = createMockRes()
+    await handler(
+      createMockReq('POST', '/ag-swarm/api/model-presets', {
+        modelPresets: {
+          explorer: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'low' },
+          verifier: { provider: 'anthropic', model: 'claude-opus-5-5', reasoningEffort: 'high' },
+        },
+      }),
+      postRes.res,
+    )
+    expect(postRes.status).toBe(200)
+    const postBody = JSON.parse(postRes.chunks.join(''))
+    expect(postBody.ok).toBe(true)
+    expect(postBody.modelPresets.explorer.model).toBe('deepseek-chat')
+
+    // GET /api/model-presets & GET /api/config return presets + primaryCommand='swarm'
+    const getRes = createMockRes()
+    await handler(createMockReq('GET', '/ag-swarm/api/model-presets'), getRes.res)
+    expect(getRes.status).toBe(200)
+    expect(JSON.parse(getRes.chunks.join('')).modelPresets.verifier.model).toBe('claude-opus-5-5')
+
+    const cfgRes = createMockRes()
+    await handler(createMockReq('GET', '/ag-swarm/api/config'), cfgRes.res)
+    expect(cfgRes.status).toBe(200)
+    const cfg = JSON.parse(cfgRes.chunks.join(''))
+    expect(cfg.primaryCommand).toBe('swarm')
+    expect(cfg.modelPresets.explorer.model).toBe('deepseek-chat')
+
+    // WorkerPool applies role_preset and semantic inference on addWorkers
+    const swarm = pool.ensureSwarmForSession(coord.id, 'Preset Swarm', cwd)
+    const [w1] = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      callerAgent: coord,
+      name: 'code-scout',
+      brief: 'Inspect codebase',
+    })
+    const [w2] = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      callerAgent: coord,
+      name: 'custom-task',
+      role_preset: 'verifier',
+      brief: 'Verify output',
+    })
+    expect(w1!.model).toBe('deepseek-chat')
+    expect(w1!.reasoning_effort).toBe('low')
+    expect(w2!.model).toBe('claude-opus-5-5')
+    expect(w2!.provider).toBe('anthropic')
+    expect(w2!.reasoning_effort).toBe('high')
+
+    disposeRoutes()
+    cmdHandle.dispose()
     await pool.dispose()
   })
 })

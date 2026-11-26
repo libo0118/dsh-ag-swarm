@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardMessage, MemberRecord, SwarmSnapshotPayload } from '../../src/shared/protocol'
 import { createGifEncoder } from '../gif-encoder'
+import { t, useUiLocale } from '../i18n'
 import { HiveCanvas } from './HiveCanvas'
 import { MentionsGraph, computeEdgeGeom, computeGraphState, type GraphLayoutState } from './MentionsGraph'
 
@@ -405,6 +406,8 @@ function gifFilename(title: string): string {
 
 export function GraphTab(props: GraphTabProps): JSX.Element {
   const { snapshot, onJumpToSeq } = props
+  const locale = useUiLocale()
+  const isZh = locale === 'zh-CN'
   const [view, setView] = useState<GraphViewMode>('hive')
   const [replayIdx, setReplayIdx] = useState<number | null>(null)
   const [playing, setPlaying] = useState(false)
@@ -521,7 +524,7 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
 
   const handleExportGif = useCallback(async () => {
     if (exportProgress !== null) return
-    setExportProgress('Preparing…')
+    setExportProgress(t('graph.exporting'))
     try {
       const logicalW = 640
       const title = snapshot.title || 'Untitled swarm'
@@ -680,7 +683,11 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
         const rgba = renderFrame(plan[i])
         enc.addFrame(rgba, plan[i].delayMs)
         if (i + 1 < plan.length && performance.now() - lastYield >= 16) {
-          setExportProgress(`Exporting ${Math.round(((i + 1) / plan.length) * 100)}%`)
+          setExportProgress(
+            isZh
+              ? `导出中 ${Math.round(((i + 1) / plan.length) * 100)}%`
+              : `Exporting ${Math.round(((i + 1) / plan.length) * 100)}%`,
+          )
           await new Promise((r) => setTimeout(r, 0))
           lastYield = performance.now()
         }
@@ -688,7 +695,9 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
       const bytes = enc.finish()
       const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: 'image/gif' })
       const url = URL.createObjectURL(blob)
-      const meta = `${plan.length} ${plan.length === 1 ? 'frame' : 'frames'} · ${fmtBytes(bytes.length)}`
+      const meta = isZh
+        ? `${plan.length} 帧 · ${fmtBytes(bytes.length)}`
+        : `${plan.length} ${plan.length === 1 ? 'frame' : 'frames'} · ${fmtBytes(bytes.length)}`
       setGifPreview((prev) => {
         if (prev?.url) URL.revokeObjectURL(prev.url)
         return { url, filename, meta }
@@ -722,8 +731,8 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
             type="button"
             className="ag-icon-btn"
             disabled={replayIdx === 0 || total === 0}
-            title="Reset to start"
-            aria-label="Reset replay"
+            title={isZh ? '重置到起点' : 'Reset to start'}
+            aria-label={isZh ? '重置回放' : 'Reset replay'}
             onClick={() => handleSeek(0)}
           >
             ⏮
@@ -732,8 +741,8 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
             type="button"
             className="ag-icon-btn"
             disabled={upto <= 0 || total === 0}
-            title="Previous post (←)"
-            aria-label="Previous post"
+            title={isZh ? '上一条 (←)' : 'Previous post (←)'}
+            aria-label={isZh ? '上一条' : 'Previous post'}
             onClick={() => handleSeek(upto - 1)}
           >
             ◀
@@ -742,8 +751,8 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
             type="button"
             className="ag-icon-btn"
             disabled={total === 0}
-            title={playing ? 'Pause (Space)' : 'Play (Space)'}
-            aria-label={playing ? 'Pause replay' : 'Play replay'}
+            title={playing ? (isZh ? '暂停 (Space)' : 'Pause (Space)') : (isZh ? '播放 (Space)' : 'Play (Space)')}
+            aria-label={playing ? (isZh ? '暂停回放' : 'Pause replay') : (isZh ? '播放回放' : 'Play replay')}
             onClick={handleTogglePlay}
             style={{ background: 'var(--ag-fill, rgba(128,128,128,0.1))', color: 'var(--ag-fg, inherit)' }}
           >
@@ -753,8 +762,8 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
             type="button"
             className="ag-icon-btn"
             disabled={!replaying || upto >= total}
-            title="Next post (→)"
-            aria-label="Next post"
+            title={isZh ? '下一条 (→)' : 'Next post (→)'}
+            aria-label={isZh ? '下一条' : 'Next post'}
             onClick={() => handleSeek(upto + 1)}
           >
             ▶
@@ -766,7 +775,7 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
             max={total}
             value={upto}
             disabled={total === 0}
-            aria-label="Replay timeline"
+            aria-label={isZh ? '回放时间轴' : 'Replay timeline'}
             onChange={(e) => handleSeek(Number(e.target.value))}
             style={{
               flex: '1 1 auto',
@@ -783,7 +792,7 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
             className={`ag-pill-btn${!replaying ? ' on' : ''}`}
             aria-pressed={!replaying}
             onClick={handleLive}
-            title="Return to live view"
+            title={isZh ? '切回实时视图' : 'Return to live view'}
           >
             <span
               className="ag-live-dot"
@@ -791,7 +800,7 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
                 background: !replaying ? 'var(--ag-success, #63984f)' : 'var(--ag-fg-faint, #9da5ab)',
               }}
             />
-            Live
+            {t('common.live')}
           </button>
         </div>
 
@@ -802,7 +811,7 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
           <div
             className="ag-segmented"
             role="group"
-            aria-label="Graph view mode"
+            aria-label={isZh ? '图谱视图模式' : 'Graph view mode'}
             style={{
               display: 'inline-flex',
               gap: 2,
@@ -831,7 +840,7 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
                     cursor: 'pointer',
                   }}
                 >
-                  {mode === 'hive' ? 'Hive' : 'Mentions'}
+                  {mode === 'hive' ? t('graph.hive') : t('graph.mentions')}
                 </button>
               )
             })}
@@ -842,34 +851,37 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
             style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)', fontVariantNumeric: 'tabular-nums' }}
           >
             {!replaying ? (
-              <>
-                <strong style={{ color: 'var(--ag-fg, inherit)' }}>{total} {total === 1 ? 'post' : 'posts'}</strong>
-                {total > 1 && lastMs > t0 ? ` over ${fmtDur(lastMs - t0)}` : ''}
-              </>
+              total > 1 && lastMs > t0 ? (
+                t('graph.postsOver', { count: total, span: fmtDur(lastMs - t0) })
+              ) : (
+                <strong style={{ color: 'var(--ag-fg, inherit)' }}>
+                  {isZh ? `${total} 条动态` : `${total} ${total === 1 ? 'post' : 'posts'}`}
+                </strong>
+              )
             ) : (
               <>
-                <strong style={{ color: 'var(--ag-fg, inherit)' }}>{upto}</strong> of {total}
-                {current ? ` · #${current.seq} at ${fmtClock(msgMs(current))} (+${fmtDur(msgMs(current) - t0)})` : ''}
+                <strong style={{ color: 'var(--ag-fg, inherit)' }}>{upto}</strong> / {total}
+                {current ? ` · #${current.seq} · ${fmtClock(msgMs(current))} (+${fmtDur(msgMs(current) - t0)})` : ''}
               </>
             )}
           </span>
 
           <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-            <label className="ag-select" title="Replay pacing">
+            <label className="ag-select" title={isZh ? '回放节奏' : 'Replay pacing'}>
               <select
-                aria-label="Replay pacing"
+                aria-label={isZh ? '回放节奏' : 'Replay pacing'}
                 value={pacing}
                 onChange={(e) => setPacing(e.target.value as PacingMode)}
                 style={{ fontSize: 12, height: 26 }}
               >
-                <option value="even">Even pacing</option>
-                <option value="realtime">Real-time gaps</option>
+                <option value="even">{t('graph.evenPacing')}</option>
+                <option value="realtime">{t('graph.realTime')}</option>
               </select>
             </label>
 
-            <label className="ag-select" title="Playback speed">
+            <label className="ag-select" title={isZh ? '播放倍速' : 'Playback speed'}>
               <select
-                aria-label="Playback speed"
+                aria-label={isZh ? '播放倍速' : 'Playback speed'}
                 value={String(speed)}
                 onChange={(e) => setSpeed(Number(e.target.value) || 1)}
                 style={{ fontSize: 12, height: 26 }}
@@ -887,12 +899,12 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
                 <label className="ag-switch">
                   <input type="checkbox" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} />
                   <span className="ag-switch-track" />
-                  <span>Hide inactive</span>
+                  <span>{t('graph.hideInactive')}</span>
                 </label>
                 <label className="ag-switch">
                   <input type="checkbox" checked={expandAll} onChange={(e) => setExpandAll(e.target.checked)} />
                   <span className="ag-switch-track" />
-                  <span>Expand @all</span>
+                  <span>{t('graph.expandAll')}</span>
                 </label>
               </>
             )}
@@ -904,7 +916,7 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
               onClick={() => void handleExportGif()}
               data-testid="swarm-export-gif"
             >
-              {exportProgress ?? 'Export GIF'}
+              {exportProgress ?? t('graph.exportGif')}
             </button>
           </div>
         </div>
@@ -1012,9 +1024,9 @@ export function GraphTab(props: GraphTabProps): JSX.Element {
                 className="ag-btn primary sm"
                 style={{ textDecoration: 'none' }}
               >
-                Download GIF
+                {isZh ? '下载 GIF' : 'Download GIF'}
               </a>
-              <button type="button" className="ag-icon-btn" onClick={() => setGifPreview(null)} aria-label="Close preview">
+              <button type="button" className="ag-icon-btn" onClick={() => setGifPreview(null)} aria-label={t('common.close')}>
                 ✕
               </button>
             </div>

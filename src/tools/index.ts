@@ -121,6 +121,7 @@ export function registerSwarmTools(
           model: { type: 'string', description: 'Model id for action=add or action=model.' },
           provider: { type: 'string', description: 'Optional provider id for action=add or action=model.' },
           reasoning_effort: { type: 'string', description: 'Optional reasoning effort for action=add or action=model.' },
+          role_preset: { type: 'string', description: 'Optional role preset key (e.g. explorer, author, verifier, monitor, or custom role from Settings) for action=add.' },
           title: { type: 'string', description: 'Short swarm title for action=title.' },
           channel_op: { type: 'string', enum: ['create', 'archive', 'subscribe', 'unsubscribe'], description: 'Channel operation for action=channel.' },
           channel: { type: 'string', description: 'Channel name (without #) for action=channel.' },
@@ -147,7 +148,7 @@ export function registerSwarmTools(
             return JSON.stringify(pool.getRosterStatus(caller.swarm.swarm_id))
           }
           case 'models': {
-            return JSON.stringify({ models: pool.listModels() })
+            return JSON.stringify(pool.getModelCatalogWithPresets())
           }
           case 'add': {
             const name = String(args.name ?? '').trim()
@@ -166,6 +167,7 @@ export function registerSwarmTools(
               model: typeof args.model === 'string' ? args.model : undefined,
               provider: typeof args.provider === 'string' ? args.provider : undefined,
               reasoning_effort: typeof args.reasoning_effort === 'string' ? args.reasoning_effort : undefined,
+              role_preset: typeof args.role_preset === 'string' && args.role_preset.trim() ? args.role_preset.trim() : undefined,
               signal: exec.signal,
             })
             return JSON.stringify({

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { RawFilesPayload } from '../../src/shared/protocol'
+import { t, useUiLocale } from '../i18n'
 import { swarmClientStore } from '../store'
 
 type RawFileName = 'swarm.json' | 'members.json' | 'board.jsonl' | 'plan.json'
@@ -35,6 +36,8 @@ async function copyToClipboard(text: string): Promise<boolean> {
 
 export function RawTab(props: { swarmId: string }): JSX.Element {
   const { swarmId } = props
+  const locale = useUiLocale()
+  const isZh = locale === 'zh-CN'
   const [selected, setSelected] = useState<RawFileName>('members.json')
   const [payload, setPayload] = useState<RawFilesPayload | null>(null)
   const [loading, setLoading] = useState(false)
@@ -127,7 +130,7 @@ export function RawTab(props: { swarmId: string }): JSX.Element {
             onClick={() => void load()}
             disabled={loading}
           >
-            {loading ? 'Loading…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('raw.refresh')}
           </button>
           <button
             type="button"
@@ -135,7 +138,7 @@ export function RawTab(props: { swarmId: string }): JSX.Element {
             onClick={() => void handleCopy()}
             disabled={!content}
           >
-            {copied ? 'Copied' : 'Copy'}
+            {copied ? t('common.copied') : t('common.copy')}
           </button>
         </div>
       </div>
@@ -169,7 +172,7 @@ export function RawTab(props: { swarmId: string }): JSX.Element {
           <span dir="ltr">{filePath}</span>
         </span>
         <span className="ag-raw-size" style={{ flex: 'none', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-          · {fmtBytes(bytes)} · {lines} {lines === 1 ? 'line' : 'lines'}
+          · {fmtBytes(bytes)} · {isZh ? `${lines} 行` : `${lines} ${lines === 1 ? 'line' : 'lines'}`}
         </span>
       </div>
 
@@ -185,7 +188,7 @@ export function RawTab(props: { swarmId: string }): JSX.Element {
             fontSize: 'var(--ag-text-xs, 12px)',
           }}
         >
-          Failed to load raw files: {error}
+          {isZh ? `加载原始文件失败：${error}` : `Failed to load raw files: ${error}`}
         </div>
       )}
 
@@ -208,7 +211,7 @@ export function RawTab(props: { swarmId: string }): JSX.Element {
           tabSize: 2,
         }}
       >
-        {content || (loading ? 'Loading…' : '(empty)')}
+        {content || (loading ? (isZh ? '加载中…' : 'Loading…') : (isZh ? '（空）' : '(empty)'))}
       </pre>
     </div>
   )

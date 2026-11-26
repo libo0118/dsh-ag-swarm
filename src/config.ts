@@ -21,7 +21,7 @@ export const DEFAULT_SWARM_CONFIG: Readonly<SwarmConfig> = Object.freeze({
   stallCheckIntervalMs: 180_000,
   enableStallMonitor: true,
   enableWorktrees: true,
-  registerSwarmCommandAlias: false,
+  registerSwarmCommandAlias: true,
 })
 
 export const Config: Schema<SwarmConfig> = Schema.object({
@@ -50,8 +50,8 @@ export const Config: Schema<SwarmConfig> = Schema.object({
     .default(true)
     .description('Use Git worktrees for share-mode workers when running inside a Git repository.'),
   registerSwarmCommandAlias: Schema.boolean()
-    .default(false)
-    .description('Also register /swarm as an alias of /ag-swarm if not already claimed by another plugin.'),
+    .default(true)
+    .description('Register /swarm as the primary slash command (with /ag-swarm alias) unless /swarm is already claimed by another plugin.'),
 })
 
 export function resolveSwarmConfig(input?: Partial<SwarmConfig>): SwarmConfig {
@@ -64,7 +64,7 @@ export function resolveSwarmConfig(input?: Partial<SwarmConfig>): SwarmConfig {
     stallCheckIntervalMs: clampInt(input?.stallCheckIntervalMs, 5_000, 3_600_000, 180_000),
     enableStallMonitor: typeof input?.enableStallMonitor === 'boolean' ? input.enableStallMonitor : true,
     enableWorktrees: typeof input?.enableWorktrees === 'boolean' ? input.enableWorktrees : true,
-    registerSwarmCommandAlias: typeof input?.registerSwarmCommandAlias === 'boolean' ? input.registerSwarmCommandAlias : false,
+    registerSwarmCommandAlias: typeof input?.registerSwarmCommandAlias === 'boolean' ? input.registerSwarmCommandAlias : true,
   }
 }
 

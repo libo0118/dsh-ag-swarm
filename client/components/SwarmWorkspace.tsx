@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { UiActionRequest } from '../../src/shared/protocol'
+import { t, toggleUiLocale, useUiLocale } from '../i18n'
 import { useSwarmStore } from '../store'
 import { OverviewTab } from './OverviewTab'
 import { BoardTab, type JumpTarget } from './BoardTab'
@@ -33,6 +34,8 @@ function detectHostTheme(): 'light' | 'dark' {
 }
 
 export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
+  const locale = useUiLocale()
+  const zh = locale === 'zh-CN'
   const {
     snapshot,
     swarms,
@@ -78,16 +81,16 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
     setActionError(null)
     try {
       await postAction(req)
-      if (req.action === 'post_message') showToast('Posted to board')
-      else if (req.action === 'switch_model') showToast(`Switched @${req.member} model`)
-      else if (req.action === 'kill_worker') showToast(`Killed @${req.member}`)
-      else if (req.action === 'nudge_worker') showToast(`Nudged @${req.member}`)
+      if (req.action === 'post_message') showToast(zh ? '已发布到黑板' : 'Posted to board')
+      else if (req.action === 'switch_model') showToast(zh ? `已切换 @${req.member} 模型` : `Switched @${req.member} model`)
+      else if (req.action === 'kill_worker') showToast(zh ? `已终止 @${req.member}` : `Killed @${req.member}`)
+      else if (req.action === 'nudge_worker') showToast(zh ? `已唤醒 @${req.member}` : `Nudged @${req.member}`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setActionError(msg)
       throw err
     }
-  }, [postAction, showToast])
+  }, [postAction, showToast, zh])
 
   const handleLoadEarlier = useCallback(async () => {
     if (!snapshot || loadingEarlier) return
@@ -110,20 +113,27 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
   }, [snapshot])
 
   const liveClass = sync === 'live' ? '' : error ? 'error' : 'stale'
-  const liveLabel = sync === 'live' ? 'Live' : sync === 'reconnecting' ? 'Reconnecting' : sync === 'connecting' ? 'Connecting' : 'Snapshot'
+  const liveLabel =
+    sync === 'live'
+      ? t('common.live')
+      : sync === 'reconnecting'
+        ? t('common.reconnecting')
+        : sync === 'connecting'
+          ? (zh ? '连接中' : 'Connecting')
+          : t('common.offline')
 
   return (
     <div className="ag-root" data-testid="swarm-board" data-theme={theme}>
       <header className="ag-header">
         <div className="ag-header-row">
-          <h1 className="ag-swarm-title" title={snapshot ? `${snapshot.title}\n${snapshot.swarm_id}` : 'Hive Swarm'}>
-            {snapshot?.title || 'Hive Swarm'}
+          <h1 className="ag-swarm-title" title={snapshot ? `${snapshot.title}\n${snapshot.swarm_id}` : t('slot.swarm')}>
+            {snapshot?.title || t('slot.swarm')}
           </h1>
 
           {swarms.length > 1 && (
             <select
               className="ag-swarm-select"
-              aria-label="Select swarm"
+              aria-label={zh ? '切换蜂群' : 'Select swarm'}
               value={snapshot?.swarm_id ?? ''}
               onChange={(e) => { void selectSwarm(e.target.value || null) }}
             >
@@ -138,8 +148,8 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
           <button
             type="button"
             className="ag-icon-btn"
-            title="Refresh snapshot"
-            aria-label="Refresh snapshot"
+            title={t('common.refresh')}
+            aria-label={t('common.refresh')}
             onClick={() => { void refresh(true) }}
           >
             <svg className="ag-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -147,13 +157,24 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             </svg>
           </button>
 
-          <span className={`ag-live ${liveClass}`} title={error ?? 'Live SSE updates'}>
+          <button
+            type="button"
+            className="ag-ghost-btn"
+            data-testid="swarm-locale-toggle"
+            title={zh ? 'Switch UI to English' : '切换界面为简体中文'}
+            aria-label={zh ? 'Switch UI to English' : '切换界面为简体中文'}
+            onClick={() => { toggleUiLocale() }}
+          >
+            {zh ? 'EN' : '中文'}
+          </button>
+
+          <span className={`ag-live ${liveClass}`} title={error ?? (zh ? 'SSE 实时推送中' : 'Live SSE updates')}>
             <span className="ag-live-dot" aria-hidden="true" />
             <span>{liveLabel}</span>
           </span>
         </div>
 
-        <nav className="ag-tabs" role="tablist" aria-label="Swarm views">
+        <nav className="ag-tabs" role="tablist" aria-label={zh ? '蜂群视图切换' : 'Swarm views'}>
           <button
             type="button"
             role="tab"
@@ -162,7 +183,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             data-testid="swarm-tab-overview"
             onClick={() => setTab('overview')}
           >
-            <span>Overview</span>
+            <span>{t('tab.overview')}</span>
             {counts.attention > 0 && <span className="ag-tab-badge">{counts.attention}</span>}
           </button>
           <button
@@ -173,7 +194,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             data-testid="swarm-tab-feed"
             onClick={() => setTab('feed')}
           >
-            <span>Board</span>
+            <span>{t('tab.board')}</span>
             {snapshot && snapshot.head > 0 && <span className="ag-tab-count">{snapshot.head}</span>}
           </button>
           <button
@@ -184,7 +205,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             data-testid="swarm-tab-members"
             onClick={() => setTab('members')}
           >
-            <span>Members</span>
+            <span>{t('tab.members')}</span>
             {counts.members > 0 && <span className="ag-tab-count">{counts.members}</span>}
           </button>
           <button
@@ -195,7 +216,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             data-testid="swarm-tab-graph"
             onClick={() => setTab('graph')}
           >
-            <span>Graph</span>
+            <span>{t('tab.graph')}</span>
           </button>
           <button
             type="button"
@@ -205,7 +226,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             data-testid="swarm-tab-raw"
             onClick={() => setTab('raw')}
           >
-            <span>Raw</span>
+            <span>{t('tab.raw')}</span>
           </button>
         </nav>
       </header>
@@ -216,7 +237,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             <div className="ag-ov-sys error" role="alert" style={{ marginBottom: 10 }}>
               <span className="ag-ov-sys-dot" aria-hidden="true" />
               <div className="ag-ov-sys-body">{actionError}</div>
-              <button type="button" className="ag-ghost-btn" onClick={() => setActionError(null)}>Dismiss</button>
+              <button type="button" className="ag-ghost-btn" onClick={() => setActionError(null)}>{t('common.close')}</button>
             </div>
           )}
 
@@ -225,7 +246,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
               <div className="ag-skel" style={{ width: '58%', height: 14 }} />
               <div className="ag-skel" style={{ width: '88%', height: 10, marginTop: 10 }} />
               <div className="ag-skel" style={{ width: '74%', height: 10, marginTop: 8 }} />
-              <p className="ag-loading-caption">Connecting to Hive Swarm…</p>
+              <p className="ag-loading-caption">{t('common.loading')}</p>
             </div>
           ) : !snapshot ? (
             <div className="ag-empty">
@@ -240,10 +261,8 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
                   <circle className="ag-empty-node" cx="12" cy="40" r="5" />
                   <circle className="ag-empty-node" cx="44" cy="40" r="5" />
                 </svg>
-                <h2 className="ag-empty-title">No active swarm yet</h2>
-                <p className="ag-empty-body">
-                  Swarms started in this session appear here automatically with Overview, Board, Members, and Hive Graph. Start one with <code>/ag-swarm</code>.
-                </p>
+                <h2 className="ag-empty-title">{t('common.emptyTitle')}</h2>
+                <p className="ag-empty-body">{t('common.emptyDesc')}</p>
                 {swarms.length > 0 && (
                   <div className="ag-empty-swarms">
                     {swarms.slice(0, 5).map((s) => (
@@ -253,7 +272,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
                         className="ag-btn sm"
                         onClick={() => { void selectSwarm(s.swarm_id) }}
                       >
-                        Open {s.title || s.swarm_id.slice(0, 8)} (#{s.head})
+                        {zh ? '查看 ' : 'Open '}{s.title || s.swarm_id.slice(0, 8)} (#{s.head})
                       </button>
                     ))}
                   </div>

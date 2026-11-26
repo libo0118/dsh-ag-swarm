@@ -6,6 +6,7 @@ export { Config, PLUGIN_VERSION };
 export type { SwarmConfig };
 export { SwarmStore } from './core/store.js';
 export { buildSnapshot } from './core/projection.js';
+export { ModelPresetStore, resolveModelForWorker, sanitizeRoleModelMap } from './core/model-presets.js';
 export * from './core/channels.js';
 export { WorkerPool } from './runtime/worker-pool.js';
 export { SwarmStallMonitor } from './runtime/stall-monitor.js';

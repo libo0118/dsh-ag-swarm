@@ -1,11 +1,29 @@
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // @ts-ignore esbuild bundles .css imports as raw string via loader: { '.css': 'text' }
 import stylesCss from './styles.css'
+import { syncHostLocale, t } from './i18n'
 import { swarmClientStore, type LegacyApiLike, type RemoteLike } from './store'
 import { SwarmWorkspace } from './components/SwarmWorkspace'
 import { HeaderWidget } from './components/HeaderWidget'
 import { ToolCard } from './components/ToolCard'
 import { SettingsSection } from './components/SettingsSection'
+
+interface HostLocaleLike {
+  current?: string
+  locale?: string
+  language?: string
+  get?: () => string | undefined
+  subscribe?: (fn: () => void) => (() => void) | void
+}
+
+function readHostLocale(loc: HostLocaleLike | undefined): string | undefined {
+  if (!loc) return undefined
+  try {
+    return loc.current ?? loc.locale ?? loc.language ?? loc.get?.()
+  } catch {
+    return undefined
+  }
+}
 
 export const name = 'dsh-ag-swarm-client'
 
@@ -42,15 +60,26 @@ export function apply(ctx: ClientContext): (() => void) | void {
     return { api, remote }
   })
 
+  let offHostLocale: (() => void) | undefined
+  try {
+    const initialLoc = (ctx as unknown as { locale?: HostLocaleLike }).locale
+    syncHostLocale(readHostLocale(initialLoc))
+  } catch { /* ignore */ }
+
   try {
     (ctx as unknown as { inject?: (names: string[], cb: (scope: unknown) => void) => void }).inject?.(
       ['connection', 'remote', 'remote.llm', 'remote.session', 'locale'],
       (scope: unknown) => {
-        const services = scope as { connection?: { api?: unknown }; remote?: unknown }
+        const services = scope as { connection?: { api?: unknown }; remote?: unknown; locale?: HostLocaleLike }
         swarmClientStore.setFacesGetter(() => ({
           api: services.connection?.api as LegacyApiLike | undefined,
           remote: services.remote as RemoteLike | undefined,
         }))
+        syncHostLocale(readHostLocale(services.locale))
+        const unsub = services.locale?.subscribe?.(() => {
+          syncHostLocale(readHostLocale(services.locale))
+        })
+        if (typeof unsub === 'function') offHostLocale = unsub
         void swarmClientStore.listModels(true).catch(() => {})
       },
     )
@@ -58,7 +87,7 @@ export function apply(ctx: ClientContext): (() => void) | void {
 
   ctx.slots.inject('conversation.view' as never, () =>
     ctx.slots.register(
-      { name: 'conversation.view', id: 'ag-swarm', order: 21, label: 'Swarm' } as never,
+      { name: 'conversation.view', id: 'ag-swarm', order: 21, label: t('slot.swarm') } as never,
       SwarmWorkspace as never,
     ),
   )
@@ -79,12 +108,13 @@ export function apply(ctx: ClientContext): (() => void) | void {
 
   ctx.slots.inject('settings.section' as never, () =>
     ctx.slots.register(
-      { name: 'settings.section', id: 'ag-swarm', order: 31, label: 'Hive Swarm' } as never,
+      { name: 'settings.section', id: 'ag-swarm', order: 31, label: t('slot.settings') } as never,
       SettingsSection as never,
     ),
   )
 
   return () => {
+    try { offHostLocale?.() } catch { /* ignore */ }
     if (styleEl && styleEl.parentNode) {
       styleEl.parentNode.removeChild(styleEl)
     }

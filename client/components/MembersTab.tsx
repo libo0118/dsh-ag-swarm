@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { MemberRecord, SwarmSnapshotPayload, UiActionRequest } from '../../src/shared/protocol'
 import { PixelBee, getBeeTileBg } from '../bee-sprites'
+import { t, useUiLocale } from '../i18n'
 import type { CatalogModelOption } from '../store'
 import { MemberDrawer } from './MemberDrawer'
 
@@ -19,22 +20,25 @@ function shortWorkspace(ws: string): string {
   return out.length > 44 ? `…${out.slice(-43)}` : out
 }
 
-function getStatusBadge(m: MemberRecord): { label: string; tone: 'info' | 'warn' | 'bad' | 'muted' } {
-  if (m.killed || m.state === 'killed') return { label: 'Retired', tone: 'muted' }
+function getStatusBadge(m: MemberRecord, isZh: boolean): { label: string; tone: 'info' | 'warn' | 'bad' | 'muted' } {
+  if (m.killed || m.state === 'killed') return { label: t('members.state.killed'), tone: 'muted' }
   if (m.failure) {
-    if (m.failure.kind === 'quota') return { label: 'Quota', tone: 'bad' }
-    if (m.failure.kind === 'stuck') return { label: 'Stuck', tone: 'bad' }
-    return { label: 'Error', tone: 'bad' }
+    if (m.failure.kind === 'quota') return { label: isZh ? '配额耗尽' : 'Quota', tone: 'bad' }
+    if (m.failure.kind === 'stuck') return { label: isZh ? '疑似卡住' : 'Stuck', tone: 'bad' }
+    return { label: isZh ? '出错' : 'Error', tone: 'bad' }
   }
   if (m.state === 'working') {
-    return { label: m.role === 'coordinator' ? 'Coordinator · Working' : 'Working', tone: 'info' }
+    return {
+      label: m.role === 'coordinator' ? `${t('members.coordinator')} · ${t('members.state.working')}` : t('members.state.working'),
+      tone: 'info',
+    }
   }
   if (m.waiting_on && m.waiting_on.length > 0) {
-    return { label: `Waiting on @${m.waiting_on[0]}`, tone: 'warn' }
+    return { label: t('members.waitingOn', { target: m.waiting_on[0] }), tone: 'warn' }
   }
-  if (m.state === 'stopped') return { label: 'Stopped', tone: 'muted' }
-  if (m.role === 'coordinator') return { label: 'Coordinator', tone: 'muted' }
-  return { label: 'Waiting', tone: 'muted' }
+  if (m.state === 'stopped') return { label: t('members.state.stopped'), tone: 'muted' }
+  if (m.role === 'coordinator') return { label: t('members.coordinator'), tone: 'muted' }
+  return { label: t('members.state.waiting'), tone: 'muted' }
 }
 
 function getDotVariant(m: MemberRecord): 'working' | 'waiting' | 'stuck' | 'error' | undefined {
@@ -70,6 +74,8 @@ function matchesQuery(m: MemberRecord, query: string): boolean {
 
 export function MembersTab(props: MembersTabProps): JSX.Element {
   const { snapshot, onJumpToSeq, onAction, models } = props
+  const locale = useUiLocale()
+  const isZh = locale === 'zh-CN'
   const [query, setQuery] = useState('')
   const [retiredOpen, setRetiredOpen] = useState(false)
   const [selectedMemberName, setSelectedMemberName] = useState<string | null>(null)
@@ -111,7 +117,7 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
   const shimmerDelay = `-${Date.now() % 1900}ms`
 
   const renderCard = (m: MemberRecord): JSX.Element => {
-    const badge = getStatusBadge(m)
+    const badge = getStatusBadge(m, isZh)
     const dotVariant = getDotVariant(m)
     const beeState = m.killed || m.state === 'killed'
       ? 'killed'
@@ -375,8 +381,8 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search members, models, branches, tasks…"
-            aria-label="Search members"
+            placeholder={t('members.search')}
+            aria-label={t('members.search')}
           />
         </label>
       </div>
@@ -394,8 +400,8 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
         </section>
       )}
 
-      {renderGroup('Active', activeWorkers)}
-      {renderGroup('Standing by', standbyWorkers)}
+      {renderGroup(t('members.active'), activeWorkers)}
+      {renderGroup(t('members.standingBy'), standbyWorkers)}
 
       {retiredWorkers.length > 0 && (
         <section
@@ -428,7 +434,7 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
               cursor: 'pointer',
             }}
           >
-            <span>Retired</span>
+            <span>{t('members.retired')}</span>
             <em style={{ fontStyle: 'normal', fontWeight: 500, color: 'var(--ag-fg-faint, #9da5ab)' }}>
               {retiredWorkers.length}
             </em>
@@ -444,7 +450,9 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
 
       {!hasAnyVisible && (
         <div style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--ag-fg-muted, #5d676f)', fontSize: 13 }}>
-          {normalizedQuery ? `No members match "${query}".` : 'No members in this swarm yet.'}
+          {normalizedQuery
+            ? (isZh ? `未找到匹配 "${query}" 的成员。` : `No members match "${query}".`)
+            : (isZh ? '当前蜂群暂无成员。' : 'No members in this swarm yet.')}
         </div>
       )}
 

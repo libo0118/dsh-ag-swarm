@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardMessage, MemberRecord, SwarmSnapshotPayload } from '../../src/shared/protocol'
 import { getBeeDataUrl } from '../bee-sprites'
+import { t, useUiLocale } from '../i18n'
 
 export interface GraphNodeInfo {
   id: string
@@ -280,6 +281,8 @@ export function computeGraphState(
 
 export function MentionsGraph(props: MentionsGraphProps): JSX.Element {
   const { snapshot, messages, replaying, upto, expandAll, hideInactive, onJumpToSeq } = props
+  const locale = useUiLocale()
+  const isZh = locale === 'zh-CN'
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const [width, setWidth] = useState(640)
@@ -597,26 +600,26 @@ export function MentionsGraph(props: MentionsGraphProps): JSX.Element {
             <line x1="0" y1="4" x2="17" y2="4" stroke="currentColor" strokeWidth="1.5" />
             <polygon points="15,1 22,4 15,7" fill="currentColor" />
           </svg>
-          Direct / channel
+          {t('graph.legendDirect')}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <svg width="22" height="8" viewBox="0 0 22 8" aria-hidden="true">
             <line x1="0" y1="4" x2="17" y2="4" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
             <polygon points="15,1 22,4 15,7" fill="currentColor" />
           </svg>
-          Via @all
+          {t('graph.legendAll')}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <svg width="16" height="10" viewBox="0 0 16 10" aria-hidden="true">
             <rect x="1" y="1" width="14" height="8" rx="4" fill="none" stroke="currentColor" strokeDasharray="2 2" />
           </svg>
-          Unaddressed post
+          {t('graph.legendUnaddressed')}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span style={{ padding: '0 5px', borderRadius: 999, fontSize: 9, fontWeight: 600, background: 'var(--ag-fill, rgba(128,128,128,0.1))' }}>
             @all N
           </span>
-          Broadcast count
+          {isZh ? '@all 广播次数' : 'Broadcast count'}
         </span>
       </div>
     </div>
