@@ -14,9 +14,11 @@ export interface HostModelSelectionLike {
 export interface HostAgentLike {
   id: string
   status?: string
+  options?: Record<string, unknown>
   session?: {
     id?: string
     header?: Record<string, unknown>
+    requestHeader?: () => { config?: { provider?: string; model?: string; reasoningEffort?: string } } | undefined
   }
   model?: HostModelSelectionLike
   steer?: (message: unknown) => Promise<void> | void

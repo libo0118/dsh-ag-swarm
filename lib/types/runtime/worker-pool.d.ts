@@ -70,7 +70,8 @@ export declare class WorkerPool {
     };
     private rebuildSessionIndex;
     private installHostListeners;
-    ensureSwarmForSession(sessionId: string, title?: string, baseWorkspace?: string): SwarmState;
+    ensureSwarmForSession(sessionId: string, title?: string, baseWorkspace?: string, agent?: HostAgentLike): SwarmState;
+    private syncCoordinatorFromAgent;
     resolveCaller(agent?: HostAgentLike, explicitSwarmId?: string): {
         swarm: SwarmState;
         member: MemberRecord;
@@ -146,5 +147,9 @@ export declare class WorkerPool {
     };
     listModels(): CatalogModelInfo[];
     getMemberTranscript(swarmId: string, memberName: string): Promise<MemberTranscriptPayload>;
+    kickoffCoordinator(agent: HostAgentLike | undefined, swarmId: string, goal: string, attachments?: readonly unknown[]): Promise<{
+        dispatched: boolean;
+        method?: 'followup' | 'steer';
+    }>;
     dispose(): Promise<void>;
 }

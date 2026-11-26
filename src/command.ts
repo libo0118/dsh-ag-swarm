@@ -1,4 +1,4 @@
-import type { HostCommandsLike, PluginContextLike } from './types/dsh-host.js'
+import type { HostAgentLike, HostCommandsLike, PluginContextLike } from './types/dsh-host.js'
 import type { SwarmConfig } from './shared/protocol.js'
 import type { SwarmStore } from './core/store.js'
 import type { WorkerPool } from './runtime/worker-pool.js'
@@ -44,6 +44,7 @@ export async function handleAgSwarmCommand(
   pool: WorkerPool,
   rawInput: string,
   agent?: unknown,
+  attachments?: readonly unknown[],
 ): Promise<AgSwarmCommandResult> {
   const trimmed = rawInput.trim()
   const sessionId = sessionIdOf(agent)
@@ -108,18 +109,30 @@ export async function handleAgSwarmCommand(
       }
     }
 
-    // Default: treat full text as a goal to initialize the swarm
+    // Default: treat full text as a goal to initialize the swarm & kick off coordinator turn
     const title = trimmed.length > 72 ? `${trimmed.slice(0, 72)}…` : trimmed
     store.setTitle(swarm.swarm_id, title)
     const { message } = await pool.postMessage(swarm.swarm_id, {
       agent: 'coordinator',
       text: `Swarm goal: ${trimmed}`,
     })
+    const kickoff = await pool.kickoffCoordinator(
+      agent as HostAgentLike | undefined,
+      swarm.swarm_id,
+      trimmed,
+      attachments,
+    )
+    if (kickoff.dispatched) {
+      return {
+        kind: 'success',
+        text: `Swarm ${swarm.swarm_id} started ("${title}", #${message.seq}). Coordinator turn queued via ${kickoff.method} — watch the Swarm tab & sidebar progress.`,
+      }
+    }
     return {
       kind: 'success',
       text: [
         `Swarm ${swarm.swarm_id} initialized ("${title}", #${message.seq}).`,
-        'Next steps as coordinator:',
+        'Send a prompt in this chat to kick off the coordinator:',
         '1. Use `swarm{action:"add", name, brief, workspace}` to spawn parallel workers on disjoint scopes.',
         `2. Immediately loop calling \`swarm_wait{since: ${message.seq}}\` after dispatching so this DSH main session stays actively running in the sidebar at zero LLM tokens until workers report back.`,
         '3. Post `[done]` on the board when all work is integrated.',
@@ -148,10 +161,11 @@ export function registerSwarmCommand(
       const dispose = commands.register({
         name,
         description: 'Antigravity Swarm: launch and manage persistent parallel workers, shared channel board, and coordinator swarm_wait.',
-        input: { hint: '[<goal>|status|title <t>|add <name> <brief>|post <msg>|kill <name>|help]' },
+        input: { hint: '[<goal>|status|title <t>|add <name> <brief>|post <msg>|kill <name>|help]', attachments: true },
         handler: async (invocation) => {
           const rawInput = typeof invocation.rawInput === 'string' ? invocation.rawInput : ''
-          return handleAgSwarmCommand(store, pool, rawInput, invocation.agent)
+          const attachments = Array.isArray(invocation.attachments) ? invocation.attachments : undefined
+          return handleAgSwarmCommand(store, pool, rawInput, invocation.agent, attachments)
         },
       })
       if (typeof dispose === 'function') disposers.push(dispose)

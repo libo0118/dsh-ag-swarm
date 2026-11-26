@@ -392,7 +392,7 @@ export class SwarmStore extends EventEmitter {
       name: 'coordinator',
       conversation_id: sessionId,
       role: 'coordinator',
-      state: 'working',
+      state: 'waiting',
       killed: false,
       model: 'default',
       model_display_name: 'Default',

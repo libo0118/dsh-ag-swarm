@@ -7,6 +7,7 @@ import { BoardTab, type JumpTarget } from './BoardTab'
 import { MembersTab } from './MembersTab'
 import { GraphTab } from './GraphTab'
 import { RawTab } from './RawTab'
+import { RoleModelPresetsCard } from './SettingsSection'
 
 export type WorkspaceTab = 'overview' | 'feed' | 'members' | 'graph' | 'raw'
 
@@ -55,6 +56,16 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
   const [actionError, setActionError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const [showRoleModels, setShowRoleModels] = useState(false)
+
+  useEffect(() => {
+    if (!showRoleModels) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setShowRoleModels(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showRoleModels])
 
   useEffect(() => {
     if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') return
@@ -155,6 +166,16 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             <svg className="ag-icon" viewBox="0 0 16 16" aria-hidden="true">
               <path d="M13 8a5 5 0 1 1-1.3-3.35M13 3v2.5h-2.5" />
             </svg>
+          </button>
+
+          <button
+            type="button"
+            className="ag-ghost-btn"
+            data-testid="swarm-open-role-models"
+            title={zh ? '按角色定制子代理模型' : 'Configure per-role worker models'}
+            onClick={() => setShowRoleModels(true)}
+          >
+            {zh ? '角色模型' : 'Role Models'}
           </button>
 
           <button
@@ -263,6 +284,15 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
                 </svg>
                 <h2 className="ag-empty-title">{t('common.emptyTitle')}</h2>
                 <p className="ag-empty-body">{t('common.emptyDesc')}</p>
+                <div style={{ marginTop: 12, display: 'flex', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="ag-btn sm"
+                    onClick={() => setShowRoleModels(true)}
+                  >
+                    {zh ? '按角色定制模型' : 'Configure Role Models'}
+                  </button>
+                </div>
                 {swarms.length > 0 && (
                   <div className="ag-empty-swarms">
                     {swarms.slice(0, 5).map((s) => (
@@ -317,6 +347,54 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
           )}
         </div>
       </div>
+
+      {showRoleModels && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={zh ? '按角色定制模型' : 'Role Model Presets'}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowRoleModels(false)
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 80,
+            background: 'rgba(0, 0, 0, 0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: 'min(720px, 100%)',
+              maxHeight: '88vh',
+              overflowY: 'auto',
+              borderRadius: 12,
+              background: 'var(--ag-bg, #f7f7f8)',
+              padding: 14,
+              boxShadow: '0 18px 48px rgba(0, 0, 0, 0.28)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <strong style={{ fontSize: 13 }}>{zh ? '按角色定制子代理模型' : 'Role Model Presets'}</strong>
+              <button
+                type="button"
+                className="ag-ghost-btn"
+                onClick={() => setShowRoleModels(false)}
+              >
+                {t('common.close')}
+              </button>
+            </div>
+            <RoleModelPresetsCard />
+          </div>
+        </div>
+      )}
 
       {toast && <div className="ag-toast" role="status">{toast}</div>}
     </div>

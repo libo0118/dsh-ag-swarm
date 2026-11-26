@@ -892,4 +892,86 @@ describe('/swarm primary command, WorkerPool presets & /api/model-presets routes
     cmdHandle.dispose()
     await pool.dispose()
   })
+
+  it('/swarm <goal> kicks off coordinator via agent.followup, child inherits requestHeader/agentPreset, and swarm plan updates overview', async () => {
+    const storageDir = makeTempDir('ag-kickoff-store-')
+    const cwd = makeTempDir('ag-kickoff-cwd-')
+    const ctx = new MockHostContext(cwd)
+
+    const followups: Array<Record<string, unknown>> = []
+    const coordAgent: HostAgentLike = {
+      id: 'coord-kickoff-1',
+      status: 'idle',
+      options: { provider: 'deepseek', model: 'deepseek-chat', maxTokens: 8192 },
+      session: {
+        id: 'coord-kickoff-1',
+        header: { id: 'coord-kickoff-1', cwd, agentPreset: 'standard' },
+        requestHeader: () => ({
+          config: { provider: 'anthropic', model: 'claude-sonnet-4-5', reasoningEffort: 'high' },
+        }),
+      },
+      async followup(msg) {
+        followups.push(msg as Record<string, unknown>)
+      },
+    }
+    ctx.agentsMap.set(coordAgent.id, coordAgent as unknown as MockAgent)
+
+    const store = new SwarmStore(storageDir)
+    const config = resolveSwarmConfig({ storageDir, enableWorktrees: false })
+    const pool = new WorkerPool(ctx, store, config)
+    const toolsHandle = registerSwarmTools(ctx, store, pool)
+    const cmdHandle = registerSwarmCommand(ctx, store, pool, config)
+
+    // 1) /swarm <goal> triggers coordinator turn via agent.followup with V4 user source
+    const cmd = ctx.registeredCommands.get('swarm')
+    expect(cmd).toBeDefined()
+    const res = await cmd.handler({ rawInput: 'Analyze PlantMirror architecture', agent: coordAgent })
+    expect(res.kind).toBe('success')
+    expect(res.text).toContain('Coordinator turn queued via followup')
+    expect(followups).toHaveLength(1)
+    expect(followups[0]?.role).toBe('user')
+    expect((followups[0]?.source as { kind?: string })?.kind).toBe('user')
+    expect(JSON.stringify(followups[0]?.content)).toContain('Analyze PlantMirror architecture')
+
+    // Coordinator initial state reflects real idle status until agent/status=running
+    const swarm = store.getSwarmBySession(coordAgent.id)!
+    expect(swarm.members.coordinator.state).toBe('waiting')
+    expect(swarm.members.coordinator.model).toBe('claude-sonnet-4-5')
+
+    // 2) Child spawned without role preset inherits parent requestHeader().config & agentPreset
+    const [inheritedWorker] = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      callerAgent: coordAgent,
+      name: 'decompiler',
+      brief: 'Inspect binary',
+    })
+    expect(inheritedWorker.model).toBe('claude-sonnet-4-5')
+    expect(inheritedWorker.provider).toBe('anthropic')
+    expect(inheritedWorker.reasoning_effort).toBe('high')
+
+    const createdSpec = ctx.createdCalls.at(-1) as {
+      meta?: { agentPreset?: string }
+      agentOptions?: { provider?: string; model?: string; reasoningEffort?: string; maxTokens?: number }
+    }
+    expect(createdSpec.meta?.agentPreset).toBe('standard')
+    expect(createdSpec.agentOptions?.model).toBe('claude-sonnet-4-5')
+    expect(createdSpec.agentOptions?.provider).toBe('anthropic')
+    expect(createdSpec.agentOptions?.maxTokens).toBe(8192)
+
+    // 3) swarm{action:"plan"} updates plan.json for Overview
+    const swarmTool = ctx.registeredTools.get('swarm')
+    const planOut = JSON.parse(await swarmTool.execute({
+      action: 'plan',
+      goal: { title: 'PlantMirror Audit', line: 'Decompile & verify' },
+      plan_tasks: { decompiler: 'Decompile assemblies' },
+      threads: [{ id: 't1', title: 'Decompile', goal: 'Extract C#', tasks: ['decompiler'] }],
+    }, { agent: coordAgent }))
+    expect(planOut.ok).toBe(true)
+    expect(store.getSwarm(swarm.swarm_id)!.plan?.goal.title).toBe('PlantMirror Audit')
+
+    cmdHandle.dispose()
+    toolsHandle.dispose()
+    await pool.dispose()
+  })
 })

@@ -150,6 +150,47 @@ export function buildPluginUserMessage(text: string, summary = 'swarm notificati
   })
 }
 
+export function buildUserKickoffMessage(text: string, attachments?: readonly unknown[]): Record<string, unknown> {
+  const blocks = [
+    ...(Array.isArray(attachments) ? attachments : []),
+    { type: 'text', text },
+  ]
+  return Object.freeze({
+    id: randomUUID(),
+    role: 'user',
+    content: Object.freeze(blocks),
+    source: Object.freeze({ kind: 'user' }),
+  })
+}
+
+export interface ParentAgentInheritance {
+  agentOptions: Record<string, unknown>
+  agentPreset?: string
+}
+
+export function resolveParentAgentOptions(parent?: HostAgentLike): ParentAgentInheritance {
+  const baseOptions = parent?.options && typeof parent.options === 'object' ? { ...parent.options } : {}
+  const requestConfig = typeof parent?.session?.requestHeader === 'function'
+    ? parent.session.requestHeader()?.config
+    : undefined
+  const headerPreset = parent?.session?.header?.agentPreset
+  const agentPreset = typeof headerPreset === 'string' && headerPreset.trim().length > 0 ? headerPreset.trim() : undefined
+
+  if (!requestConfig || typeof requestConfig !== 'object') {
+    return { agentOptions: baseOptions, agentPreset }
+  }
+  const { provider: _p, model: _m, reasoningEffort: _e, ...rest } = baseOptions
+  const merged: Record<string, unknown> = {
+    ...rest,
+    ...(typeof requestConfig.provider === 'string' && requestConfig.provider ? { provider: requestConfig.provider } : {}),
+    ...(typeof requestConfig.model === 'string' && requestConfig.model ? { model: requestConfig.model } : {}),
+    ...(typeof requestConfig.reasoningEffort === 'string' && requestConfig.reasoningEffort
+      ? { reasoningEffort: requestConfig.reasoningEffort }
+      : {}),
+  }
+  return { agentOptions: merged, agentPreset }
+}
+
 export function registerMessageSourceCompat(ctx?: PluginContextLike): () => void {
   if (!ctx) return () => {}
   const candidate =

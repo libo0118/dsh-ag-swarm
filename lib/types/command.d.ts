@@ -10,5 +10,5 @@ export interface RegisteredCommandHandle {
     dispose: () => void;
     primaryCommand: string;
 }
-export declare function handleAgSwarmCommand(store: SwarmStore, pool: WorkerPool, rawInput: string, agent?: unknown): Promise<AgSwarmCommandResult>;
+export declare function handleAgSwarmCommand(store: SwarmStore, pool: WorkerPool, rawInput: string, agent?: unknown, attachments?: readonly unknown[]): Promise<AgSwarmCommandResult>;
 export declare function registerSwarmCommand(ctx: PluginContextLike, store: SwarmStore, pool: WorkerPool, config: Pick<SwarmConfig, 'registerSwarmCommandAlias'>): RegisteredCommandHandle;

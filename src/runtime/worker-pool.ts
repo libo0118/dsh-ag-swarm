@@ -25,7 +25,9 @@ import type {
 } from '../types/dsh-host.js'
 import {
   buildPluginUserMessage,
+  buildUserKickoffMessage,
   readSessionSeed,
+  resolveParentAgentOptions,
   selectAgentModelCompat,
   startSubagentCompat,
   unwrapAgentHandle,
@@ -322,10 +324,31 @@ export class WorkerPool {
     })
   }
 
-  ensureSwarmForSession(sessionId: string, title?: string, baseWorkspace?: string): SwarmState {
+  ensureSwarmForSession(sessionId: string, title?: string, baseWorkspace?: string, agent?: HostAgentLike): SwarmState {
     const state = this.store.createOrGetSwarm(sessionId, title, baseWorkspace)
     this.sessionIndex.set(sessionId, { swarmId: state.swarm_id, memberName: 'coordinator' })
+    if (agent) this.syncCoordinatorFromAgent(state.swarm_id, agent)
     return state
+  }
+
+  private syncCoordinatorFromAgent(swarmId: string, agent: HostAgentLike): void {
+    const swarm = this.store.getSwarm(swarmId)
+    const coord = swarm?.members.coordinator
+    if (!swarm || !coord || isKilled(coord)) return
+    const liveState = agent.status === 'running' ? 'working' : 'waiting'
+    const inherited = resolveParentAgentOptions(agent)
+    const liveModel = typeof inherited.agentOptions.model === 'string' ? inherited.agentOptions.model : undefined
+    const liveProvider = typeof inherited.agentOptions.provider === 'string' ? inherited.agentOptions.provider : undefined
+    const patch: Partial<MemberRecord> = {}
+    if (coord.state !== liveState) patch.state = liveState
+    if (liveModel && (coord.model === 'default' || coord.model !== liveModel)) {
+      patch.model = liveModel
+      patch.model_display_name = liveModel
+    }
+    if (liveProvider && coord.provider !== liveProvider) patch.provider = liveProvider
+    if (Object.keys(patch).length > 0) {
+      this.store.updateMember(swarmId, 'coordinator', patch)
+    }
   }
 
   resolveCaller(agent?: HostAgentLike, explicitSwarmId?: string): {
@@ -349,19 +372,23 @@ export class WorkerPool {
       const swarm = this.store.getSwarm(indexed.swarmId)
       const member = swarm?.members[indexed.memberName]
       if (swarm && member) {
-        return { swarm, member, callerName: indexed.memberName, sessionId, cwd }
+        if (indexed.memberName === 'coordinator' && agent) {
+          this.syncCoordinatorFromAgent(swarm.swarm_id, agent)
+        }
+        return { swarm, member: swarm.members[indexed.memberName] ?? member, callerName: indexed.memberName, sessionId, cwd }
       }
     }
 
     if (explicitSwarmId) {
       const swarm = this.store.getSwarm(explicitSwarmId)
       if (swarm) {
+        if (agent) this.syncCoordinatorFromAgent(swarm.swarm_id, agent)
         const coord = swarm.members.coordinator
         return { swarm, member: coord, callerName: 'coordinator', sessionId, cwd }
       }
     }
 
-    const swarm = this.ensureSwarmForSession(sessionId, undefined, cwd)
+    const swarm = this.ensureSwarmForSession(sessionId, undefined, cwd, agent)
     return { swarm, member: swarm.members.coordinator, callerName: 'coordinator', sessionId, cwd }
   }
 
@@ -530,10 +557,23 @@ export class WorkerPool {
       workerName,
       presets: this.modelPresets.getAll(),
     })
+    const inherited = resolveParentAgentOptions(params.callerAgent)
+    const parentModel = typeof inherited.agentOptions.model === 'string' ? inherited.agentOptions.model : undefined
+    const parentProvider = typeof inherited.agentOptions.provider === 'string' ? inherited.agentOptions.provider : undefined
     const callerMember = swarm.members[params.callerName]
-    const modelName = resolvedModel?.model || callerMember?.model || 'default'
-    const providerName = resolvedModel?.provider || params.provider || callerMember?.provider
-    const reasoningEffort = resolvedModel?.reasoningEffort || params.reasoningEffort || callerMember?.reasoning_effort
+    const callerModel = callerMember?.model && callerMember.model !== 'default' ? callerMember.model : undefined
+    const modelName = resolvedModel?.model || callerModel || parentModel || 'default'
+    const providerName = resolvedModel?.provider || params.provider || callerMember?.provider || parentProvider
+    const routeChanged =
+      (providerName !== undefined && providerName !== parentProvider) ||
+      (resolvedModel?.model !== undefined && resolvedModel.model !== parentModel)
+    const reasoningEffort =
+      resolvedModel?.reasoningEffort ||
+      params.reasoningEffort ||
+      (!routeChanged
+        ? (callerMember?.reasoning_effort ||
+          (typeof inherited.agentOptions.reasoningEffort === 'string' ? inherited.agentOptions.reasoningEffort : undefined))
+        : undefined)
     const modelDisplayName = resolvedModel?.label || modelName
 
     const member = this.store.addMember(swarm.swarm_id, {
@@ -572,11 +612,16 @@ export class WorkerPool {
       brief,
     ].join('\n')
 
-    const effectiveModelForOptions = resolvedModel?.model
+    const effectiveModelForOptions = resolvedModel?.model ?? parentModel
     const agentOptions: Record<string, unknown> = {
+      ...inherited.agentOptions,
       ...(providerName ? { provider: providerName } : {}),
       ...(effectiveModelForOptions ? { model: effectiveModelForOptions } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      subagentDepth: params.depth,
+    }
+    if (routeChanged && !resolvedModel?.reasoningEffort && !params.reasoningEffort) {
+      delete agentOptions.reasoningEffort
     }
 
     const agents = this.ctx.get<HostAgentsLike>('agents')
@@ -590,6 +635,7 @@ export class WorkerPool {
           isSeeded: Boolean(params.forkSeed && params.forkSeed.seed.length > 0),
           origin: 'subagent',
           delegationDepth: params.depth,
+          ...(inherited.agentPreset ? { agentPreset: inherited.agentPreset } : {}),
         },
         ...(params.forkSeed && params.forkSeed.seed.length > 0
           ? {
@@ -1228,6 +1274,50 @@ export class WorkerPool {
       branch: member.branch,
       steps,
     }
+  }
+
+  async kickoffCoordinator(
+    agent: HostAgentLike | undefined,
+    swarmId: string,
+    goal: string,
+    attachments?: readonly unknown[],
+  ): Promise<{ dispatched: boolean; method?: 'followup' | 'steer' }> {
+    const swarm = this.store.getSwarm(swarmId)
+    if (!swarm) return { dispatched: false }
+    if (agent) this.syncCoordinatorFromAgent(swarmId, agent)
+
+    const presets = this.modelPresets.getAll()
+    const presetEntries = Object.entries(presets)
+    const presetSummary = presetEntries.length > 0
+      ? presetEntries.map(([k, v]) => `${k}=${v.provider ? `${v.provider}/` : ''}${v.model}`).join(', ')
+      : 'none (workers inherit your current chat model)'
+
+    const waitTool = this.ctx.get<{ has?: (n: string) => boolean }>('tools')?.has?.('ag_swarm_wait')
+      ? 'ag_swarm_wait'
+      : 'swarm_wait'
+    const prompt = [
+      `[Swarm Coordinator Kickoff — ${swarmId} (board head #${swarm.head})]`,
+      `User Goal: ${goal}`,
+      `Configured Role Model Presets: ${presetSummary}`,
+      '',
+      'Execute as the Antigravity Swarm coordinator:',
+      '1. Split the goal into independent parallel tracks with disjoint file/module ownership.',
+      '2. Call `swarm{action:"add", name, brief, role_preset, workspace}` in parallel to spawn workers (use `workspace:"share"` for concurrent file editors, `role_preset` like `"explorer"` / `"author"` / `"verifier"`, and instruct every worker to report back with `@coordinator [done] ...`).',
+      '3. Call `swarm{action:"plan", goal:{title,line}, plan_tasks:{...}, threads:[...]}` so the Overview tab renders live progress.',
+      `4. IMMEDIATELY loop calling \`${waitTool}{since: <head>}\` after dispatching workers — it blocks with zero LLM token burn while keeping this main DSH session marked as working in the sidebar until workers report back or the user steers.`,
+      '5. Review results, integrate changes, run final verification, and post `[done] <summary>` (without `@`) via `post_message` before replying to the user.',
+    ].join('\n')
+
+    const msg = buildUserKickoffMessage(prompt, attachments)
+    if (agent && typeof agent.followup === 'function') {
+      await agent.followup(msg)
+      return { dispatched: true, method: 'followup' }
+    }
+    if (agent && typeof agent.steer === 'function') {
+      await agent.steer(msg)
+      return { dispatched: true, method: 'steer' }
+    }
+    return { dispatched: false }
   }
 
   async dispose(): Promise<void> {

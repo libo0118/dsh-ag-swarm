@@ -66,6 +66,12 @@ export declare function getDshHome(ctx?: PluginContextLike): string;
 export declare function detectHostCapabilities(ctx?: PluginContextLike): HostCapabilities;
 export declare function boundSummary(summary: string, maxChars?: number): string;
 export declare function buildPluginUserMessage(text: string, summary?: string): Record<string, unknown>;
+export declare function buildUserKickoffMessage(text: string, attachments?: readonly unknown[]): Record<string, unknown>;
+export interface ParentAgentInheritance {
+    agentOptions: Record<string, unknown>;
+    agentPreset?: string;
+}
+export declare function resolveParentAgentOptions(parent?: HostAgentLike): ParentAgentInheritance;
 export declare function registerMessageSourceCompat(ctx?: PluginContextLike): () => void;
 export declare function unwrapAgentHandle(maybeHandle: unknown): UnwrappedAgentHandle | undefined;
 export declare function startSubagentCompat(ctx: PluginContextLike, input: SubagentStartInput): Promise<SubagentStartHandle>;

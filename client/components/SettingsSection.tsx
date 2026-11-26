@@ -48,11 +48,10 @@ function catalogKey(provider: string | undefined, model: string): string {
   return `${provider ?? ''}::${model}`
 }
 
-export function SettingsSection(): JSX.Element {
+export function RoleModelPresetsCard(): JSX.Element {
   const locale = useUiLocale()
   const isZh = locale === 'zh-CN'
   const [storeState, setStoreState] = useState<SwarmClientState>(() => swarmClientStore.getState())
-  const [config, setConfig] = useState<ConfigPayload>(DEFAULT_CONFIG)
   const [draftPresets, setDraftPresets] = useState<RoleModelMap>({})
   const [customRoles, setCustomRoles] = useState<string[]>([])
   const [manualRoles, setManualRoles] = useState<Record<string, boolean>>({})
@@ -60,24 +59,16 @@ export function SettingsSection(): JSX.Element {
   const [roleInputErr, setRoleInputErr] = useState<string | null>(null)
   const [savingPresets, setSavingPresets] = useState(false)
   const [saveFeedback, setSaveFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
-  const [jumpNotice, setJumpNotice] = useState<string | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => {
     const release = swarmClientStore.retain()
     const unsub = swarmClientStore.subscribe((next) => setStoreState(next))
-    void swarmClientStore.listSwarms().catch(() => {})
     void swarmClientStore.listModels().catch(() => {})
     void fetch('/ag-swarm/api/config', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : null))
       .then((raw: unknown) => {
         if (!raw || typeof raw !== 'object') return
         const obj = ((raw as { config?: unknown }).config ?? raw) as Partial<ConfigPayload>
-        setConfig((prev) => ({
-          ...prev,
-          ...obj,
-          modelPresets: obj.modelPresets && typeof obj.modelPresets === 'object' ? obj.modelPresets : prev.modelPresets,
-        }))
         if (obj.modelPresets && typeof obj.modelPresets === 'object') {
           const presets = obj.modelPresets
           setDraftPresets(presets)
@@ -186,7 +177,6 @@ export function SettingsSection(): JSX.Element {
       }
       const saved = json.modelPresets ?? cleaned
       setDraftPresets(saved)
-      setConfig((prev) => ({ ...prev, modelPresets: saved }))
       setSaveFeedback({ kind: 'ok', text: t('settings.presetsSaved') })
     } catch (err) {
       setSaveFeedback({
@@ -197,6 +187,307 @@ export function SettingsSection(): JSX.Element {
       setSavingPresets(false)
     }
   }, [allRoleKeys, draftPresets])
+
+  return (
+    <div
+      className="ag-settings-card"
+      data-testid="swarm-role-models-card"
+      style={{
+        padding: '12px 14px',
+        borderRadius: 10,
+        border: '1px solid var(--ag-card-border, rgba(128,128,128,0.2))',
+        background: 'var(--ag-card, #ffffff)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--ag-fg-muted, #5d676f)' }}>
+          {t('settings.roleModelsTitle')}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)', marginTop: 3 }}>
+          {t('settings.roleModelsDesc')}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {allRoleKeys.map((role) => {
+          const preset = draftPresets[role]
+          const isBuiltin = BUILTIN_SET.has(role)
+          const curKey = preset?.model ? catalogKey(preset.provider, preset.model) : ''
+          const matchedCatalog = curKey ? catalogByKey.get(curKey) : undefined
+          const hasUnknownSaved = Boolean(preset?.model && !matchedCatalog)
+          const isManual = Boolean(manualRoles[role]) || (storeState.models.length === 0 && Boolean(preset?.model))
+          const effortList = matchedCatalog?.efforts && matchedCatalog.efforts.length > 0
+            ? matchedCatalog.efforts
+            : [...DEFAULT_EFFORTS]
+          const effortOptions = preset?.reasoningEffort && !effortList.includes(preset.reasoningEffort)
+            ? [...effortList, preset.reasoningEffort]
+            : effortList
+
+          return (
+            <div
+              key={role}
+              data-testid={`swarm-role-row-${role}`}
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 10px',
+                borderRadius: 8,
+                background: 'var(--ag-fill, rgba(128,128,128,0.06))',
+              }}
+            >
+              <div style={{ minWidth: 160, flex: '0 1 185px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {roleDisplayLabel(role)}
+                </span>
+                {!isBuiltin && (
+                  <button
+                    type="button"
+                    className="ag-icon-btn"
+                    onClick={() => handleRemoveRole(role)}
+                    aria-label={isZh ? `删除角色 ${role}` : `Remove role ${role}`}
+                    title={isZh ? '删除自定义角色' : 'Remove custom role'}
+                    style={{ width: 20, height: 20, fontSize: 11 }}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+
+              {!isManual ? (
+                <select
+                  aria-label={`${role} model`}
+                  value={curKey}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    if (!val) {
+                      updateRolePreset(role, () => undefined)
+                      return
+                    }
+                    const opt = catalogByKey.get(val)
+                    if (opt) {
+                      updateRolePreset(role, (prev) => ({
+                        provider: opt.provider,
+                        model: opt.model,
+                        label: opt.label,
+                        ...(prev?.reasoningEffort ? { reasoningEffort: prev.reasoningEffort } : {}),
+                      }))
+                    } else {
+                      const sep = val.indexOf('::')
+                      const provider = sep >= 0 ? val.slice(0, sep) : ''
+                      const model = sep >= 0 ? val.slice(sep + 2) : val
+                      updateRolePreset(role, (prev) => ({
+                        ...(provider ? { provider } : {}),
+                        model,
+                        ...(prev?.reasoningEffort ? { reasoningEffort: prev.reasoningEffort } : {}),
+                      }))
+                    }
+                  }}
+                  style={{
+                    flex: '1 1 200px',
+                    minWidth: 160,
+                    height: 30,
+                    padding: '0 8px',
+                    borderRadius: 6,
+                    border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
+                    background: 'var(--ag-bg, #f7f7f8)',
+                    fontSize: 12,
+                  }}
+                >
+                  <option value="">{t('settings.inheritMain')}</option>
+                  {hasUnknownSaved && preset && (
+                    <option value={curKey}>
+                      {preset.provider ? `${preset.provider} / ${preset.model}` : preset.model}
+                    </option>
+                  )}
+                  {storeState.models.map((opt) => {
+                    const k = catalogKey(opt.provider, opt.model)
+                    return (
+                      <option key={k} value={k}>
+                        {opt.provider ? `${opt.provider} / ${opt.label}` : opt.label}
+                      </option>
+                    )
+                  })}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  aria-label={`${role} custom model`}
+                  value={preset?.model ?? ''}
+                  placeholder={t('settings.customModelPlaceholder')}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    updateRolePreset(role, (prev) =>
+                      val.trim()
+                        ? {
+                            ...(prev?.provider ? { provider: prev.provider } : {}),
+                            model: val,
+                            ...(prev?.reasoningEffort ? { reasoningEffort: prev.reasoningEffort } : {}),
+                          }
+                        : undefined,
+                    )
+                  }}
+                  style={{
+                    flex: '1 1 200px',
+                    minWidth: 160,
+                    height: 30,
+                    padding: '0 8px',
+                    borderRadius: 6,
+                    border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
+                    background: 'var(--ag-bg, #f7f7f8)',
+                    fontSize: 12,
+                  }}
+                />
+              )}
+
+              <select
+                aria-label={`${role} reasoning effort`}
+                value={preset?.reasoningEffort ?? ''}
+                disabled={!preset?.model?.trim()}
+                onChange={(e) => {
+                  const eff = e.target.value
+                  updateRolePreset(role, (prev) => {
+                    if (!prev?.model) return prev
+                    return {
+                      ...(prev.provider ? { provider: prev.provider } : {}),
+                      model: prev.model,
+                      ...(prev.label ? { label: prev.label } : {}),
+                      ...(eff ? { reasoningEffort: eff } : {}),
+                    }
+                  })
+                }}
+                style={{
+                  flex: '0 0 116px',
+                  height: 30,
+                  padding: '0 8px',
+                  borderRadius: 6,
+                  border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
+                  background: 'var(--ag-bg, #f7f7f8)',
+                  fontSize: 12,
+                }}
+              >
+                <option value="">{t('settings.effortDefault')}</option>
+                {effortOptions.map((ef) => (
+                  <option key={ef} value={ef}>{ef}</option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                className="ag-ghost-btn"
+                onClick={() => setManualRoles((prev) => ({ ...prev, [role]: !isManual }))}
+                style={{ height: 28, padding: '0 7px', fontSize: 11 }}
+                title={isManual ? (isZh ? '切换回模型目录选择' : 'Switch to catalog dropdown') : (isZh ? '手动输入模型 ID' : 'Type model ID manually')}
+              >
+                {isManual ? (isZh ? '选目录' : 'Catalog') : (isZh ? '手动' : 'Manual')}
+              </button>
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingTop: 4 }}>
+        <input
+          type="text"
+          value={newRoleInput}
+          onChange={(e) => {
+            setNewRoleInput(e.target.value)
+            if (roleInputErr) setRoleInputErr(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              handleAddRole()
+            }
+          }}
+          placeholder={t('settings.addRolePlaceholder')}
+          aria-label={t('settings.addRolePlaceholder')}
+          style={{
+            flex: '1 1 200px',
+            minWidth: 160,
+            height: 30,
+            padding: '0 8px',
+            borderRadius: 6,
+            border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
+            background: 'var(--ag-bg, #f7f7f8)',
+            fontSize: 12,
+          }}
+        />
+        <button type="button" className="ag-btn sm" onClick={handleAddRole} style={{ height: 30 }}>
+          + {t('settings.addRoleBtn')}
+        </button>
+        <button
+          type="button"
+          className="ag-btn primary sm"
+          disabled={savingPresets}
+          onClick={() => void handleSavePresets()}
+          data-testid="swarm-save-role-presets"
+          style={{ height: 30, marginLeft: 'auto' }}
+        >
+          {savingPresets ? t('common.saving') : t('settings.savePresets')}
+        </button>
+      </div>
+
+      {roleInputErr && (
+        <div role="alert" style={{ fontSize: 12, color: 'var(--ag-error, #cb3d3d)' }}>
+          {roleInputErr}
+        </div>
+      )}
+
+      {saveFeedback && (
+        <div
+          role="status"
+          style={{
+            padding: '7px 10px',
+            borderRadius: 8,
+            fontSize: 12,
+            background: saveFeedback.kind === 'err'
+              ? 'color-mix(in srgb, var(--ag-error, #cb3d3d) 12%, transparent)'
+              : 'color-mix(in srgb, var(--ag-success, #63984f) 14%, transparent)',
+            color: saveFeedback.kind === 'err' ? 'var(--ag-error, #cb3d3d)' : 'var(--ag-success, #63984f)',
+          }}
+        >
+          {saveFeedback.text}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function SettingsSection(): JSX.Element {
+  const locale = useUiLocale()
+  const isZh = locale === 'zh-CN'
+  const [storeState, setStoreState] = useState<SwarmClientState>(() => swarmClientStore.getState())
+  const [config, setConfig] = useState<ConfigPayload>(DEFAULT_CONFIG)
+  const [jumpNotice, setJumpNotice] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+
+  useEffect(() => {
+    const release = swarmClientStore.retain()
+    const unsub = swarmClientStore.subscribe((next) => setStoreState(next))
+    void swarmClientStore.listSwarms().catch(() => {})
+    void swarmClientStore.listModels().catch(() => {})
+    void fetch('/ag-swarm/api/config', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((raw: unknown) => {
+        if (!raw || typeof raw !== 'object') return
+        const obj = ((raw as { config?: unknown }).config ?? raw) as Partial<ConfigPayload>
+        setConfig((prev) => ({
+          ...prev,
+          ...obj,
+          modelPresets: obj.modelPresets && typeof obj.modelPresets === 'object' ? obj.modelPresets : prev.modelPresets,
+        }))
+      })
+      .catch(() => {})
+    return () => {
+      unsub()
+      release()
+    }
+  }, [])
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true)
@@ -364,273 +655,7 @@ export function SettingsSection(): JSX.Element {
         )}
       </div>
 
-      <div
-        className="ag-settings-card"
-        data-testid="swarm-role-models-card"
-        style={{
-          padding: '12px 14px',
-          borderRadius: 10,
-          border: '1px solid var(--ag-card-border, rgba(128,128,128,0.2))',
-          background: 'var(--ag-card, #ffffff)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 10,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--ag-fg-muted, #5d676f)' }}>
-            {t('settings.roleModelsTitle')}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)', marginTop: 3 }}>
-            {t('settings.roleModelsDesc')}
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {allRoleKeys.map((role) => {
-            const preset = draftPresets[role]
-            const isBuiltin = BUILTIN_SET.has(role)
-            const curKey = preset?.model ? catalogKey(preset.provider, preset.model) : ''
-            const matchedCatalog = curKey ? catalogByKey.get(curKey) : undefined
-            const hasUnknownSaved = Boolean(preset?.model && !matchedCatalog)
-            const isManual = Boolean(manualRoles[role]) || (storeState.models.length === 0 && Boolean(preset?.model))
-            const effortList = matchedCatalog?.efforts && matchedCatalog.efforts.length > 0
-              ? matchedCatalog.efforts
-              : [...DEFAULT_EFFORTS]
-            const effortOptions = preset?.reasoningEffort && !effortList.includes(preset.reasoningEffort)
-              ? [...effortList, preset.reasoningEffort]
-              : effortList
-
-            return (
-              <div
-                key={role}
-                data-testid={`swarm-role-row-${role}`}
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                  background: 'var(--ag-fill, rgba(128,128,128,0.06))',
-                }}
-              >
-                <div style={{ minWidth: 160, flex: '0 1 185px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {roleDisplayLabel(role)}
-                  </span>
-                  {!isBuiltin && (
-                    <button
-                      type="button"
-                      className="ag-icon-btn"
-                      onClick={() => handleRemoveRole(role)}
-                      aria-label={isZh ? `删除角色 ${role}` : `Remove role ${role}`}
-                      title={isZh ? '删除自定义角色' : 'Remove custom role'}
-                      style={{ width: 20, height: 20, fontSize: 11 }}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-
-                {!isManual ? (
-                  <select
-                    aria-label={`${role} model`}
-                    value={curKey}
-                    onChange={(e) => {
-                      const val = e.target.value
-                      if (!val) {
-                        updateRolePreset(role, () => undefined)
-                        return
-                      }
-                      const opt = catalogByKey.get(val)
-                      if (opt) {
-                        updateRolePreset(role, (prev) => ({
-                          provider: opt.provider,
-                          model: opt.model,
-                          label: opt.label,
-                          ...(prev?.reasoningEffort ? { reasoningEffort: prev.reasoningEffort } : {}),
-                        }))
-                      } else {
-                        const sep = val.indexOf('::')
-                        const provider = sep >= 0 ? val.slice(0, sep) : ''
-                        const model = sep >= 0 ? val.slice(sep + 2) : val
-                        updateRolePreset(role, (prev) => ({
-                          ...(provider ? { provider } : {}),
-                          model,
-                          ...(prev?.reasoningEffort ? { reasoningEffort: prev.reasoningEffort } : {}),
-                        }))
-                      }
-                    }}
-                    style={{
-                      flex: '1 1 200px',
-                      minWidth: 160,
-                      height: 30,
-                      padding: '0 8px',
-                      borderRadius: 6,
-                      border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
-                      background: 'var(--ag-bg, #f7f7f8)',
-                      fontSize: 12,
-                    }}
-                  >
-                    <option value="">{t('settings.inheritMain')}</option>
-                    {hasUnknownSaved && preset && (
-                      <option value={curKey}>
-                        {preset.provider ? `${preset.provider} / ${preset.model}` : preset.model}
-                      </option>
-                    )}
-                    {storeState.models.map((opt) => {
-                      const k = catalogKey(opt.provider, opt.model)
-                      return (
-                        <option key={k} value={k}>
-                          {opt.provider ? `${opt.provider} / ${opt.label}` : opt.label}
-                        </option>
-                      )
-                    })}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    aria-label={`${role} custom model`}
-                    value={preset?.model ?? ''}
-                    placeholder={t('settings.customModelPlaceholder')}
-                    onChange={(e) => {
-                      const val = e.target.value
-                      updateRolePreset(role, (prev) =>
-                        val.trim()
-                          ? {
-                              ...(prev?.provider ? { provider: prev.provider } : {}),
-                              model: val,
-                              ...(prev?.reasoningEffort ? { reasoningEffort: prev.reasoningEffort } : {}),
-                            }
-                          : undefined,
-                      )
-                    }}
-                    style={{
-                      flex: '1 1 200px',
-                      minWidth: 160,
-                      height: 30,
-                      padding: '0 8px',
-                      borderRadius: 6,
-                      border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
-                      background: 'var(--ag-bg, #f7f7f8)',
-                      fontSize: 12,
-                    }}
-                  />
-                )}
-
-                <select
-                  aria-label={`${role} reasoning effort`}
-                  value={preset?.reasoningEffort ?? ''}
-                  disabled={!preset?.model?.trim()}
-                  onChange={(e) => {
-                    const eff = e.target.value
-                    updateRolePreset(role, (prev) => {
-                      if (!prev?.model) return prev
-                      const next: RoleModelPreset = {
-                        ...(prev.provider ? { provider: prev.provider } : {}),
-                        model: prev.model,
-                        ...(prev.label ? { label: prev.label } : {}),
-                        ...(eff ? { reasoningEffort: eff } : {}),
-                      }
-                      return next
-                    })
-                  }}
-                  style={{
-                    flex: '0 0 116px',
-                    height: 30,
-                    padding: '0 8px',
-                    borderRadius: 6,
-                    border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
-                    background: 'var(--ag-bg, #f7f7f8)',
-                    fontSize: 12,
-                  }}
-                >
-                  <option value="">{t('settings.effortDefault')}</option>
-                  {effortOptions.map((ef) => (
-                    <option key={ef} value={ef}>{ef}</option>
-                  ))}
-                </select>
-
-                <button
-                  type="button"
-                  className="ag-ghost-btn"
-                  onClick={() => setManualRoles((prev) => ({ ...prev, [role]: !isManual }))}
-                  style={{ height: 28, padding: '0 7px', fontSize: 11 }}
-                  title={isManual ? (isZh ? '切换回模型目录选择' : 'Switch to catalog dropdown') : (isZh ? '手动输入模型 ID' : 'Type model ID manually')}
-                >
-                  {isManual ? (isZh ? '选目录' : 'Catalog') : (isZh ? '手动' : 'Manual')}
-                </button>
-              </div>
-            )
-          })}
-        </div>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingTop: 4 }}>
-          <input
-            type="text"
-            value={newRoleInput}
-            onChange={(e) => {
-              setNewRoleInput(e.target.value)
-              if (roleInputErr) setRoleInputErr(null)
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                handleAddRole()
-              }
-            }}
-            placeholder={t('settings.addRolePlaceholder')}
-            aria-label={t('settings.addRolePlaceholder')}
-            style={{
-              flex: '1 1 200px',
-              minWidth: 160,
-              height: 30,
-              padding: '0 8px',
-              borderRadius: 6,
-              border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
-              background: 'var(--ag-bg, #f7f7f8)',
-              fontSize: 12,
-            }}
-          />
-          <button type="button" className="ag-btn sm" onClick={handleAddRole} style={{ height: 30 }}>
-            + {t('settings.addRoleBtn')}
-          </button>
-          <button
-            type="button"
-            className="ag-btn primary sm"
-            disabled={savingPresets}
-            onClick={() => void handleSavePresets()}
-            data-testid="swarm-save-role-presets"
-            style={{ height: 30, marginLeft: 'auto' }}
-          >
-            {savingPresets ? t('common.saving') : t('settings.savePresets')}
-          </button>
-        </div>
-
-        {roleInputErr && (
-          <div role="alert" style={{ fontSize: 12, color: 'var(--ag-error, #cb3d3d)' }}>
-            {roleInputErr}
-          </div>
-        )}
-
-        {saveFeedback && (
-          <div
-            role="status"
-            style={{
-              padding: '7px 10px',
-              borderRadius: 8,
-              fontSize: 12,
-              background: saveFeedback.kind === 'err'
-                ? 'color-mix(in srgb, var(--ag-error, #cb3d3d) 12%, transparent)'
-                : 'color-mix(in srgb, var(--ag-success, #63984f) 14%, transparent)',
-              color: saveFeedback.kind === 'err' ? 'var(--ag-error, #cb3d3d)' : 'var(--ag-success, #63984f)',
-            }}
-          >
-            {saveFeedback.text}
-          </div>
-        )}
-      </div>
+      <RoleModelPresetsCard />
 
       <div
         className="ag-settings-card"

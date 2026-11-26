@@ -1,4 +1,4 @@
-import type { WorkspaceMode } from '../shared/protocol.js'
+import type { PlanFile, WorkspaceMode } from '../shared/protocol.js'
 import type { SwarmStore } from '../core/store.js'
 import type { WorkerPool } from '../runtime/worker-pool.js'
 import type { HostAgentLike, HostToolDefLike, HostToolsLike, PluginContextLike } from '../types/dsh-host.js'
@@ -102,14 +102,14 @@ export function registerSwarmTools(
     {
       name: 'swarm',
       description:
-        'Manage an Antigravity-style multi-agent swarm: spawn persistent parallel workers (add), inspect roster (status), list models (models), switch a waiting worker model in place (model), kill a worker (kill), set swarm title (title), or manage topic channels (channel).',
+        'Manage an Antigravity-style multi-agent swarm: spawn persistent parallel workers (add), inspect roster (status), list models (models), switch a waiting worker model in place (model), kill a worker (kill), set swarm title (title), manage topic channels (channel), or publish Overview plan/threads (plan).',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           action: {
             type: 'string',
-            enum: ['status', 'models', 'add', 'model', 'kill', 'title', 'channel'],
+            enum: ['status', 'models', 'add', 'model', 'kill', 'title', 'channel', 'plan'],
             description: 'Swarm management action to execute.',
           },
           name: { type: 'string', description: 'Worker roster name (lowercase a-z0-9_-, max 24 chars) or base name for n/tasks.' },
@@ -127,6 +127,28 @@ export function registerSwarmTools(
           channel: { type: 'string', description: 'Channel name (without #) for action=channel.' },
           topic: { type: 'string', description: 'Channel topic for channel_op=create.' },
           members: { type: 'array', items: { type: 'string' }, description: 'Member names for channel subscribe/unsubscribe/create.' },
+          goal: {
+            type: 'object',
+            description: 'Overview goal { title, line } for action=plan.',
+            properties: { title: { type: 'string' }, line: { type: 'string' } },
+          },
+          plan_tasks: {
+            type: 'object',
+            description: 'Map of worker name -> short task description for action=plan.',
+          },
+          threads: {
+            type: 'array',
+            description: 'Overview workstream groups [{ id, title, goal, tasks }] for action=plan.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                title: { type: 'string' },
+                goal: { type: 'string' },
+                tasks: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
         },
         required: ['action'],
       },
@@ -215,6 +237,37 @@ export function registerSwarmTools(
               members: Array.isArray(args.members) ? args.members.map(String) : undefined,
             })
             return JSON.stringify({ ok: true, ...res })
+          }
+          case 'plan': {
+            if (caller.callerName !== 'coordinator') {
+              throw new Error('Only the coordinator can update the swarm Overview plan')
+            }
+            const rawGoal = args.goal as { title?: unknown; line?: unknown } | undefined
+            const goalTitle = typeof rawGoal?.title === 'string' && rawGoal.title.trim()
+              ? rawGoal.title.trim()
+              : caller.swarm.title || 'Swarm Plan'
+            const goalLine = typeof rawGoal?.line === 'string' ? rawGoal.line.trim() : ''
+            const rawTasks = (args.plan_tasks && typeof args.plan_tasks === 'object' ? args.plan_tasks : {}) as Record<string, unknown>
+            const tasks: Record<string, string> = {}
+            for (const [k, v] of Object.entries(rawTasks)) {
+              if (typeof v === 'string' && v.trim()) tasks[k] = v.trim()
+            }
+            const rawThreads = Array.isArray(args.threads) ? args.threads : []
+            const threads = rawThreads
+              .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+              .map((item, idx) => ({
+                id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `t-${idx + 1}`,
+                title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : `Workstream ${idx + 1}`,
+                goal: typeof item.goal === 'string' ? item.goal.trim() : '',
+                tasks: Array.isArray(item.tasks) ? item.tasks.map(String) : [],
+              }))
+            const plan: PlanFile = {
+              goal: { title: goalTitle, line: goalLine },
+              tasks,
+              threads,
+            }
+            store.writePlan(caller.swarm.swarm_id, plan)
+            return JSON.stringify({ ok: true, swarm_id: caller.swarm.swarm_id, plan })
           }
           default:
             throw new Error(`Unsupported swarm action: ${action}`)
