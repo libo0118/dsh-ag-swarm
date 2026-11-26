@@ -1,0 +1,731 @@
+import { execFileSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { resolveSwarmConfig } from '../src/config.js'
+import { SwarmStore } from '../src/core/store.js'
+import {
+  detectHostCapabilities,
+  getDshHome,
+  readSessionSeed,
+  registerMessageSourceCompat,
+  selectAgentModelCompat,
+  startSubagentCompat,
+} from '../src/runtime/dsh-adapter.js'
+import { SwarmStallMonitor } from '../src/runtime/stall-monitor.js'
+import { WorkerPool } from '../src/runtime/worker-pool.js'
+import { cleanupWorkspace, prepareWorkspace } from '../src/runtime/workspace.js'
+import { registerSwarmRoutes } from '../src/routes.js'
+import { registerSwarmTools } from '../src/tools/index.js'
+import { registerSwarmCommand } from '../src/command.js'
+import { registerSwarmSkills } from '../src/skills.js'
+import type { HostAgentLike, PluginContextLike } from '../src/types/dsh-host.js'
+
+class MockAgent implements HostAgentLike {
+  status: 'idle' | 'running' = 'idle'
+  session: { id: string; header: Record<string, unknown>; events: unknown[]; snapshotEvents: () => unknown[] }
+  steered: unknown[] = []
+  followups: unknown[] = []
+  modelSelections: Array<{ provider?: string; model: string; reasoningEffort?: string }> = []
+  disposed = false
+  model = {
+    current: () => this.modelSelections[this.modelSelections.length - 1],
+    select: async (sel: { provider?: string; model: string; reasoningEffort?: string }) => {
+      this.modelSelections.push(sel)
+    },
+  }
+
+  constructor(
+    public id: string,
+    cwd: string,
+    seedEvents: unknown[] = [],
+  ) {
+    this.session = {
+      id,
+      header: { cwd },
+      events: [...seedEvents],
+      snapshotEvents: () => [...this.session.events],
+    }
+  }
+
+  async steer(msg: unknown): Promise<void> {
+    this.steered.push(msg)
+    this.status = 'running'
+  }
+
+  async followup(msg: unknown): Promise<void> {
+    this.followups.push(msg)
+    this.status = 'running'
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true
+  }
+}
+
+class MockHostContext extends EventEmitter implements PluginContextLike {
+  services = new Map<string, unknown>()
+  agentsMap = new Map<string, MockAgent>()
+  createdCalls: Array<Record<string, unknown>> = []
+  resumedCalls: Array<unknown> = []
+  registeredTools = new Map<string, any>()
+  registeredCommands = new Map<string, any>()
+  registeredSkills = new Map<string, any>()
+  routeHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<void> | void) | undefined
+  admitResult: unknown = { peer: { id: 'test-peer' } }
+
+  constructor(cwd: string) {
+    super()
+    this.services.set('agents', {
+      get: (id: string) => this.agentsMap.get(id),
+      create: async (opts: Record<string, unknown>) => {
+        this.createdCalls.push(opts)
+        const id = String(opts.sessionId || `agent-${this.agentsMap.size + 1}`)
+        const meta = (opts.meta ?? {}) as Record<string, unknown>
+        const seed = Array.isArray(opts.seed) ? opts.seed : []
+        const agent = new MockAgent(id, String(meta.cwd || cwd), seed)
+        this.agentsMap.set(id, agent)
+        if (typeof opts.setup === 'function') {
+          await (opts.setup as (c: unknown, a: unknown) => unknown)({}, agent)
+        }
+        return {
+          agent,
+          dispose: async () => {
+            await agent.dispose()
+            this.agentsMap.delete(id)
+          },
+        }
+      },
+      resume: async (arg: unknown) => {
+        this.resumedCalls.push(arg)
+        const id = typeof arg === 'string' ? arg : String((arg as { resumeSessionId?: string }).resumeSessionId)
+        const agent = new MockAgent(id, cwd)
+        this.agentsMap.set(id, agent)
+        return {
+          agent,
+          dispose: async () => {
+            await agent.dispose()
+            this.agentsMap.delete(id)
+          },
+        }
+      },
+    })
+    this.services.set('tools', {
+      has: (name: string) => this.registeredTools.has(name),
+      register: (tool: any) => {
+        if (this.registeredTools.has(tool.name)) throw new Error(`duplicate tool ${tool.name}`)
+        this.registeredTools.set(tool.name, tool)
+        return () => { this.registeredTools.delete(tool.name) }
+      },
+    })
+    this.services.set('commands', {
+      has: (name: string) => this.registeredCommands.has(name),
+      register: (cmd: any) => {
+        this.registeredCommands.set(cmd.name, cmd)
+        return () => { this.registeredCommands.delete(cmd.name) }
+      },
+    })
+    this.services.set('skills', {
+      register: (skill: any) => {
+        this.registeredSkills.set(skill.name, skill)
+        return () => { this.registeredSkills.delete(skill.name) }
+      },
+    })
+    this.services.set('webServer', {
+      register: (route: any) => {
+        this.routeHandler = route.handler
+        return () => { this.routeHandler = undefined }
+      },
+    })
+    this.services.set('connection', {
+      admit: () => this.admitResult,
+    })
+  }
+
+  get<T = unknown>(name: string): T | undefined {
+    return this.services.get(name) as T | undefined
+  }
+
+  effect(fn: () => (() => void) | void): () => void {
+    const dispose = fn()
+    return typeof dispose === 'function' ? dispose : () => {}
+  }
+
+  override on(event: string, listener: (...args: any[]) => any): any {
+    super.on(event, listener)
+    return () => { super.off(event, listener) }
+  }
+
+  emitStatus(agent: MockAgent, status: 'idle' | 'running'): void {
+    agent.status = status
+    this.emit('agent/status', { agent, status })
+  }
+}
+
+interface MockHttpRes {
+  status: number
+  headers: Record<string, string>
+  chunks: string[]
+  ended: boolean
+  destroyed: boolean
+  emitter: EventEmitter
+  res: ServerResponse
+}
+
+function createMockRes(): MockHttpRes {
+  const emitter = new EventEmitter()
+  const state: MockHttpRes = {
+    status: 200,
+    headers: {},
+    chunks: [],
+    ended: false,
+    destroyed: false,
+    emitter,
+    res: null as unknown as ServerResponse,
+  }
+  const res = Object.assign(emitter, {
+    get headersSent() { return state.chunks.length > 0 || state.ended },
+    get writableEnded() { return state.ended },
+    get destroyed() { return state.destroyed },
+    writeHead(code: number, headers: Record<string, string> = {}) {
+      state.status = code
+      for (const [k, v] of Object.entries(headers)) state.headers[k.toLowerCase()] = v
+      return res
+    },
+    write(chunk: string | Buffer) {
+      state.chunks.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk))
+      return true
+    },
+    end(chunk?: string | Buffer) {
+      if (chunk !== undefined) state.chunks.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk))
+      state.ended = true
+      emitter.emit('close')
+      return res
+    },
+    destroy() {
+      state.destroyed = true
+      emitter.emit('close')
+      return res
+    },
+  })
+  state.res = res as unknown as ServerResponse
+  return state
+}
+
+function createMockReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}): IncomingMessage {
+  const emitter = new EventEmitter()
+  let flushed = false
+  const req = Object.assign(emitter, {
+    method,
+    url,
+    headers: {
+      ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      ...headers,
+    },
+    complete: true,
+    aborted: false,
+    destroyed: false,
+    resume() {
+      if (body !== undefined && !flushed) {
+        flushed = true
+        queueMicrotask(() => {
+          emitter.emit('data', Buffer.from(JSON.stringify(body), 'utf8'))
+          emitter.emit('end')
+        })
+      }
+    },
+    pause() {},
+  })
+  return req as unknown as IncomingMessage
+}
+
+const tempDirs: string[] = []
+function makeTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  tempDirs.push(dir)
+  return dir
+}
+
+afterEach(() => {
+  delete process.env.DSH_AG_SWARM_ALLOW_DEMO
+  for (const dir of tempDirs.splice(0)) {
+    try { rmSync(dir, { recursive: true, force: true }) } catch { /* ignore */ }
+  }
+})
+
+describe('dsh-adapter cross-version compatibility', () => {
+  it('detects rc.3 flat startActivation vs legacy nested activation vs legacy start', async () => {
+    const cwd = makeTempDir('dsh-adapter-')
+    const parent = new MockAgent('coord-1', cwd)
+
+    // 1) rc.3+ (has listDescendants) -> flat top-level fields
+    const rc3Spec: Record<string, unknown>[] = []
+    const rc3Ctx = new MockHostContext(cwd)
+    rc3Ctx.services.set('subagents', {
+      listDescendants: () => [],
+      startActivation: async (spec: Record<string, unknown>) => {
+        rc3Spec.push(spec)
+        return { childId: 'child-rc3', name: 'w1', result: Promise.resolve({ stopReason: 'completed' }), dispose: async () => {} }
+      },
+      sendMessage: async () => ({}),
+    })
+    expect(detectHostCapabilities(rc3Ctx).subagents.mode).toBe('rc3-activation')
+    const h1 = await startSubagentCompat(rc3Ctx, { provider: 'spawn', label: 'l1', name: 'w1', prompt: 'hi', parent })
+    expect(h1.id).toBe('child-rc3')
+    expect(rc3Spec[0]!.request).toBeUndefined()
+    expect(rc3Spec[0]!.name).toBe('w1')
+
+    // 2) legacy activation (no listDescendants) -> nested request
+    const legacyActSpec: Record<string, unknown>[] = []
+    const legacyActCtx = new MockHostContext(cwd)
+    legacyActCtx.services.set('subagents', {
+      startActivation: async (spec: Record<string, unknown>) => {
+        legacyActSpec.push(spec)
+        return { childId: 'child-leg-act', result: Promise.resolve({}), dispose: async () => {} }
+      },
+    })
+    expect(detectHostCapabilities(legacyActCtx).subagents.mode).toBe('legacy-activation')
+    const h2 = await startSubagentCompat(legacyActCtx, { provider: 'spawn', label: 'l2', prompt: 'hi', parent })
+    expect(h2.id).toBe('child-leg-act')
+    expect(legacyActSpec[0]!.request).toBeDefined()
+
+    // 3) legacy start
+    const startCalls: unknown[] = []
+    const legacyStartCtx = new MockHostContext(cwd)
+    legacyStartCtx.services.set('subagents', {
+      start: async (provider: string, req: Record<string, unknown>) => {
+        startCalls.push({ provider, req })
+        return { id: 'child-start', result: Promise.resolve({}), dispose: async () => {} }
+      },
+    })
+    expect(detectHostCapabilities(legacyStartCtx).subagents.mode).toBe('legacy-start')
+    const h3 = await startSubagentCompat(legacyStartCtx, { provider: 'spawn', label: 'l3', prompt: 'hi', parent })
+    expect(h3.id).toBe('child-start')
+    expect(startCalls.length).toBe(1)
+
+    // 4) getDshHome & registerMessageSourceCompat & readSessionSeed & selectAgentModelCompat
+    rc3Ctx.services.set('profile', { home: '/custom/dsh' })
+    expect(getDshHome(rc3Ctx)).toBe('/custom/dsh')
+    const regSpy = vi.fn(() => () => {})
+    rc3Ctx.services.set('messageSources', { register: regSpy })
+    const disposeSrc = registerMessageSourceCompat(rc3Ctx)
+    expect(regSpy).toHaveBeenCalledWith('plugin:dsh-ag-swarm', { form: 'notice' })
+    disposeSrc()
+
+    const seededAgent = new MockAgent('sess-seed', cwd, [{ type: 'user/message', seq: 0, time: 1000, data: { text: 'hello' } }])
+    rc3Ctx.agentsMap.set('sess-seed', seededAgent)
+    const snap = await readSessionSeed(rc3Ctx, 'sess-seed')
+    expect(snap.inheritedEventCount).toBe(1)
+    expect(snap.seed).toHaveLength(2)
+    expect(await selectAgentModelCompat(seededAgent, { provider: 'deepseek', model: 'deepseek-reasoner' })).toBe(true)
+    expect(seededAgent.modelSelections[0]).toEqual({ provider: 'deepseek', model: 'deepseek-reasoner' })
+  })
+})
+
+describe('WorkerPool concurrency, doorbell wakeups, fork, ACL & model switching', () => {
+  it('spawns 3+ workers concurrently, rings doorbells on steer/idle/resume, and enforces ACL', async () => {
+    const storageDir = makeTempDir('ag-store-')
+    const cwd = makeTempDir('ag-cwd-')
+    const ctx = new MockHostContext(cwd)
+    const coord = new MockAgent('coord-session', cwd, [
+      { type: 'user/message', seq: 0, time: 1000, data: { text: 'Initial goal' } },
+      { type: 'assistant/message', seq: 1, time: 2000, data: { text: 'Planning swarm' } },
+    ])
+    ctx.agentsMap.set(coord.id, coord)
+
+    const store = new SwarmStore(storageDir)
+    const config = resolveSwarmConfig({ storageDir, maxWorkers: 8, maxDepth: 2, enableWorktrees: false })
+    const pool = new WorkerPool(ctx, store, config)
+    const swarm = pool.ensureSwarmForSession(coord.id, 'Parallel Test', cwd)
+
+    // Spawn 3 sharded workers concurrently
+    const spawned = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      callerAgent: coord,
+      name: 'worker',
+      brief: 'Process module',
+      tasks: ['alpha', 'beta', 'gamma'],
+      fork: 'coordinator',
+    })
+    expect(spawned.map((w) => w.name)).toEqual(['worker-1', 'worker-2', 'worker-3'])
+    expect(ctx.createdCalls).toHaveLength(3)
+    // Verify fork seed passed to every worker
+    for (const call of ctx.createdCalls) {
+      expect((call.meta as Record<string, unknown>).isSeeded).toBe(true)
+      expect(call.inheritedEventCount).toBe(2)
+      expect(Array.isArray(call.seed)).toBe(true)
+    }
+
+    const w1 = ctx.agentsMap.get(spawned[0]!.conversation_id)!
+    const w2 = ctx.agentsMap.get(spawned[1]!.conversation_id)!
+    const w3 = ctx.agentsMap.get(spawned[2]!.conversation_id)!
+    expect(w1.steered).toHaveLength(1)
+    expect(w2.steered).toHaveLength(1)
+    expect(w3.steered).toHaveLength(1)
+
+    // Put w1 into waiting via worker swarm_wait; keep w2 working; dispose w3 (stopped)
+    const waitRes = await pool.waitForBoard({
+      swarmId: swarm.swarm_id,
+      callerName: 'worker-1',
+      since: store.getSwarm(swarm.swarm_id)!.head,
+      mentions_only: true,
+    })
+    expect(waitRes.status).toBe('waiting')
+    expect(store.getSwarm(swarm.swarm_id)!.members['worker-1']!.state).toBe('waiting')
+
+    ctx.emit('agent/disposed', { agent: w3 })
+    ctx.agentsMap.delete(w3.id)
+    expect(store.getSwarm(swarm.swarm_id)!.members['worker-3']!.state).toBe('stopped')
+
+    // Post @worker group mention -> wakes w1 (steer), queues w2 (working), resumes w3 (stopped)
+    const postRes = await pool.postMessage(swarm.swarm_id, {
+      agent: 'coordinator',
+      text: '@worker please sync status',
+    })
+    expect(postRes.woken.sort()).toEqual(['worker-1', 'worker-2', 'worker-3'])
+    expect(w1.steered).toHaveLength(2)
+    expect(w2.steered).toHaveLength(1) // still working, queued until idle
+    expect(ctx.resumedCalls.length).toBe(1) // w3 cold-resumed
+
+    // When w2 goes idle, queued wakeup is delivered via steer
+    ctx.emitStatus(w2, 'idle')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(w2.steered).toHaveLength(2)
+
+    // In-place model switch: rejected while working, allowed when waiting
+    ctx.emitStatus(w1, 'idle')
+    const switched = await pool.switchModel({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      targetName: 'worker-1',
+      model: 'deepseek-reasoner',
+      provider: 'deepseek',
+    })
+    expect(switched.model).toBe('deepseek-reasoner')
+    expect(w1.modelSelections.at(-1)?.model).toBe('deepseek-reasoner')
+
+    // Worker-1 spawns a helper (depth 2)
+    const [helper] = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'worker-1',
+      callerAgent: w1,
+      name: 'helper-a',
+      brief: 'Assist worker-1',
+    })
+    expect(helper!.created_by).toBe('worker-1')
+    expect(helper!.depth).toBe(2)
+
+    // ACL: worker-2 cannot kill helper-a (created by worker-1)
+    await expect(pool.killMember(swarm.swarm_id, 'worker-2', 'helper-a')).rejects.toThrow(/ACL denied/)
+
+    // Killing worker-1 does NOT cascade-kill helper-a
+    await pool.killMember(swarm.swarm_id, 'coordinator', 'worker-1')
+    expect(store.getSwarm(swarm.swarm_id)!.members['worker-1']!.killed).toBe(true)
+    expect(store.getSwarm(swarm.swarm_id)!.members['helper-a']!.killed).toBe(false)
+
+    await pool.dispose()
+  })
+
+  it('creates and cleans up real Git worktree (share) and local clone (branch)', async () => {
+    const repoDir = makeTempDir('ag-git-repo-')
+    const storageDir = makeTempDir('ag-git-store-')
+    execFileSync('git', ['init'], { cwd: repoDir, windowsHide: true })
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoDir, windowsHide: true })
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repoDir, windowsHide: true })
+    writeFileSync(join(repoDir, 'README.md'), '# demo\n', 'utf8')
+    execFileSync('git', ['add', '.'], { cwd: repoDir, windowsHide: true })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repoDir, windowsHide: true })
+
+    const wt = await prepareWorkspace({
+      swarmId: 'swarm-12345678',
+      memberName: 'dev-a',
+      mode: 'share',
+      baseCwd: repoDir,
+      storageDir,
+      enableWorktrees: true,
+    })
+    expect(wt.kind).toBe('worktree')
+    expect(wt.branch).toMatch(/^ag-swarm\/swarm-12\/dev-a/)
+    expect(existsSync(join(wt.workspace, 'README.md'))).toBe(true)
+
+    await cleanupWorkspace({ workspace: wt.workspace, mode: 'share', baseCwd: repoDir, repoRoot: wt.repoRoot })
+    expect(existsSync(wt.workspace)).toBe(false)
+
+    const clone = await prepareWorkspace({
+      swarmId: 'swarm-12345678',
+      memberName: 'dev-b',
+      mode: 'branch',
+      baseCwd: repoDir,
+      storageDir,
+      enableWorktrees: true,
+    })
+    expect(clone.kind).toBe('clone')
+    expect(existsSync(join(clone.workspace, 'README.md'))).toBe(true)
+    await cleanupWorkspace({ workspace: clone.workspace, mode: 'branch', baseCwd: repoDir })
+    expect(existsSync(clone.workspace)).toBe(false)
+  })
+})
+
+describe('Coordinator blocking swarm_wait (zero-token sidebar keepalive)', () => {
+  it('stays pending while workers are working and resolves immediately on @coordinator, inbox insert, all_idle, or abort', async () => {
+    const storageDir = makeTempDir('ag-wait-store-')
+    const cwd = makeTempDir('ag-wait-cwd-')
+    const ctx = new MockHostContext(cwd)
+    const coord = new MockAgent('coord-wait', cwd)
+    ctx.agentsMap.set(coord.id, coord)
+
+    const store = new SwarmStore(storageDir)
+    const config = resolveSwarmConfig({ storageDir, enableWorktrees: false })
+    const pool = new WorkerPool(ctx, store, config)
+    const swarm = pool.ensureSwarmForSession(coord.id, 'Wait Test', cwd)
+    const [w1] = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      callerAgent: coord,
+      name: 'builder',
+      brief: 'Build module',
+    })
+    expect(w1!.state).toBe('working')
+
+    // 1) Stays pending while worker is working, resolves immediately when @coordinator posts
+    let resolved1 = false
+    const p1 = pool.waitForBoard({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      since: store.getSwarm(swarm.swarm_id)!.head,
+      mentions_only: true,
+      timeout_ms: 30_000,
+      agent: coord,
+    }).then((res) => {
+      resolved1 = true
+      return res
+    })
+
+    await new Promise((r) => setTimeout(r, 30))
+    expect(resolved1).toBe(false)
+
+    await pool.postMessage(swarm.swarm_id, { agent: 'builder', text: '@coordinator [done] Build complete' })
+    const res1 = await p1
+    expect(res1.status).toBe('messages')
+    expect(res1.timedOut).toBe(false)
+    expect(res1.messages?.[0]?.text).toContain('[done]')
+
+    // 2) Resolves immediately when user steers main chat (agent/inbox/inserted)
+    let resolved2 = false
+    const p2 = pool.waitForBoard({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      since: store.getSwarm(swarm.swarm_id)!.head,
+      timeout_ms: 30_000,
+      agent: coord,
+    }).then((res) => {
+      resolved2 = true
+      return res
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(resolved2).toBe(false)
+    ctx.emit('agent/inbox/inserted', { agent: coord, message: { id: 'u1' } })
+    const res2 = await p2
+    expect(res2.status).toBe('interrupted')
+    expect(res2.reason).toBe('inbox_inserted')
+
+    // 3) Cleanly rejects & cleans listeners when AbortSignal aborts
+    const ac = new AbortController()
+    const beforeListeners = store.listenerCount('update')
+    const p3 = pool.waitForBoard({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      since: store.getSwarm(swarm.swarm_id)!.head,
+      timeout_ms: 30_000,
+      agent: coord,
+      signal: ac.signal,
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(store.listenerCount('update')).toBe(beforeListeners + 1)
+    ac.abort(new Error('user-stopped'))
+    await expect(p3).rejects.toThrow('user-stopped')
+    expect(store.listenerCount('update')).toBe(beforeListeners)
+
+    // 4) Resolves with all_idle when all workers leave working state without pinging coordinator
+    const p4 = pool.waitForBoard({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      since: store.getSwarm(swarm.swarm_id)!.head,
+      timeout_ms: 30_000,
+      agent: coord,
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    store.updateMember(swarm.swarm_id, 'builder', { state: 'waiting' })
+    const res4 = await p4
+    expect(res4.status).toBe('all_idle')
+
+    await pool.dispose()
+  })
+})
+
+describe('Tools conflict fallback, Commands, Skills, StallMonitor & HTTP/SSE routes', () => {
+  it('falls back to ag_swarm_wait when swarm_wait is already claimed, and registers /ag-swarm & skills', async () => {
+    const storageDir = makeTempDir('ag-tools-store-')
+    const cwd = makeTempDir('ag-tools-cwd-')
+    const ctx = new MockHostContext(cwd)
+    ctx.registeredTools.set('swarm_wait', { name: 'swarm_wait' })
+
+    const store = new SwarmStore(storageDir)
+    const config = resolveSwarmConfig({ storageDir, registerSwarmCommandAlias: false })
+    const pool = new WorkerPool(ctx, store, config)
+
+    const toolsHandle = registerSwarmTools(ctx, store, pool)
+    expect(toolsHandle.registeredNames.swarm_wait).toBe('ag_swarm_wait')
+    expect(ctx.registeredTools.has('ag_swarm_wait')).toBe(true)
+    expect(ctx.registeredTools.has('swarm')).toBe(true)
+
+    const disposeCmd = registerSwarmCommand(ctx, store, pool, config)
+    expect(ctx.registeredCommands.has('ag-swarm')).toBe(true)
+    expect(ctx.registeredCommands.has('swarm')).toBe(false)
+    const cmdRes = await ctx.registeredCommands.get('ag-swarm').handler({ rawInput: 'build dashboard', agent: { id: 'cmd-sess' } })
+    expect(cmdRes.kind).toBe('success')
+    expect(cmdRes.text).toContain('swarm_wait')
+
+    const disposeSkills = registerSwarmSkills(ctx)
+    expect(ctx.registeredSkills.has('ag-swarm-coordinator')).toBe(true)
+    expect(ctx.registeredSkills.has('ag-swarm-worker')).toBe(true)
+
+    disposeSkills()
+    disposeCmd()
+    toolsHandle.dispose()
+    await pool.dispose()
+  })
+
+  it('StallMonitor detects unanswered mentions, cools down >=3 ticks (max 3), and silences after coordinator [done]', async () => {
+    const storageDir = makeTempDir('ag-stall-store-')
+    const store = new SwarmStore(storageDir)
+    const swarm = store.createOrGetSwarm('stall-sess', 'Stall Demo')
+    store.updateMember(swarm.swarm_id, 'coordinator', { state: 'waiting' })
+    store.addMember(swarm.swarm_id, { name: 'dev', role: 'worker', state: 'waiting' })
+    store.appendMessage(swarm.swarm_id, { agent: 'coordinator', text: '@dev please review #1' })
+
+    const alerts: string[] = []
+    const monitor = new SwarmStallMonitor({
+      config: { enableStallMonitor: true, stallCheckIntervalMs: 180_000 },
+      listSwarmViews: () => {
+        const s = store.getSwarm(swarm.swarm_id)!
+        return [{ swarmId: s.swarm_id, head: s.head, members: s.members, channels: s.channels, messages: s.messages }]
+      },
+      postStallAlert: (_id, text) => {
+        alerts.push(text)
+      },
+    })
+
+    // First tick: direct re-ping to @dev
+    await monitor.tick()
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toContain('@dev [stall]')
+
+    // Second tick: escalates to @coordinator because @dev was already pinged
+    await monitor.tick()
+    expect(alerts).toHaveLength(2)
+    expect(alerts[1]).toContain('@coordinator [stall]')
+
+    // Next 2 ticks: cooled down (<3 ticks since last alert for same escalate signature)
+    await monitor.tick()
+    await monitor.tick()
+    expect(alerts).toHaveLength(2)
+
+    // 3rd tick after escalation: fires again (count=2)
+    await monitor.tick()
+    expect(alerts).toHaveLength(3)
+
+    // Coordinator posts [done] -> monitor goes dormant
+    store.appendMessage(swarm.swarm_id, { agent: 'coordinator', text: '[done] All work completed', kind: 'done' })
+    await monitor.tick()
+    expect(alerts).toHaveLength(3)
+    monitor.stop()
+  })
+
+  it('HTTP + SSE routes enforce connection.admit, serve snapshots/raw/frames/SSE, and gate seed_demo', async () => {
+    const storageDir = makeTempDir('ag-http-store-')
+    const cwd = makeTempDir('ag-http-cwd-')
+    const ctx = new MockHostContext(cwd)
+    const store = new SwarmStore(storageDir)
+    const config = resolveSwarmConfig({ storageDir, maxWorkers: 16 })
+    const pool = new WorkerPool(ctx, store, config)
+    const disposeRoutes = registerSwarmRoutes(ctx, store, pool, { config, getWaitToolName: () => 'ag_swarm_wait' })
+    const handler = ctx.routeHandler!
+
+    // 1) Admission rejected -> 403
+    ctx.admitResult = { rejection: 403 }
+    const deniedRes = createMockRes()
+    await handler(createMockReq('GET', '/ag-swarm/api/swarms'), deniedRes.res)
+    expect(deniedRes.status).toBe(403)
+
+    // 2) Admission allowed -> seed_demo blocked without env flag
+    ctx.admitResult = { peer: { id: 'p1' } }
+    const blockedDemo = createMockRes()
+    await handler(createMockReq('POST', '/ag-swarm/api/action', { action: 'seed_demo' }), blockedDemo.res)
+    expect(blockedDemo.status).toBe(403)
+
+    // 3) Enable seed_demo via env -> creates swarm, lists swarms, fetches snapshot & raw
+    process.env.DSH_AG_SWARM_ALLOW_DEMO = '1'
+    const seedRes = createMockRes()
+    await handler(createMockReq('POST', '/ag-swarm/api/action', { action: 'seed_demo', sessionId: 'demo-s1' }), seedRes.res)
+    expect(seedRes.status).toBe(200)
+    const seeded = JSON.parse(seedRes.chunks.join(''))
+    expect(seeded.ok).toBe(true)
+
+    const listRes = createMockRes()
+    await handler(createMockReq('GET', '/ag-swarm/api/swarms'), listRes.res)
+    expect(listRes.status).toBe(200)
+    expect(JSON.parse(listRes.chunks.join('')).swarms).toHaveLength(1)
+
+    const rawRes = createMockRes()
+    await handler(createMockReq('GET', `/ag-swarm/api/swarm/raw?swarmId=${seeded.swarm_id}`), rawRes.res)
+    expect(rawRes.status).toBe(200)
+    expect(JSON.parse(rawRes.chunks.join('')).files.length).toBe(4)
+
+    // 3b) /api/config returns resolved config & waitToolName, and /api/swarm/messages accepts ?before= alias
+    const cfgRes = createMockRes()
+    await handler(createMockReq('GET', '/ag-swarm/api/config'), cfgRes.res)
+    expect(cfgRes.status).toBe(200)
+    const cfgBody = JSON.parse(cfgRes.chunks.join(''))
+    expect(cfgBody.maxWorkers).toBe(16)
+    expect(cfgBody.waitToolName).toBe('ag_swarm_wait')
+    expect(cfgBody.enableStallMonitor).toBe(true)
+
+    const pageRes = createMockRes()
+    await handler(createMockReq('GET', `/ag-swarm/api/swarm/messages?swarmId=${seeded.swarm_id}&before=3`), pageRes.res)
+    expect(pageRes.status).toBe(200)
+    const pageBody = JSON.parse(pageRes.chunks.join(''))
+    expect(pageBody.messages.every((m: { seq: number }) => m.seq < 3)).toBe(true)
+    expect(pageBody.messages.length).toBeGreaterThan(0)
+
+    // 4) /frame rejects path traversal and non-image extension
+    const travRes = createMockRes()
+    await handler(createMockReq('GET', '/ag-swarm/api/frame?path=/tmp/../etc/passwd.png'), travRes.res)
+    expect(travRes.status).toBe(403)
+
+    const badExtPath = join(cwd, 'secret.txt')
+    writeFileSync(badExtPath, 'hi')
+    const extRes = createMockRes()
+    await handler(createMockReq('GET', `/ag-swarm/api/frame?path=${encodeURIComponent(badExtPath)}`), extRes.res)
+    expect(extRes.status).toBe(415)
+
+    // 5) /events SSE pushes connected + live swarm_update and cleans up on req close
+    const sseReq = createMockReq('GET', '/ag-swarm/api/events')
+    const sseRes = createMockRes()
+    await handler(sseReq, sseRes.res)
+    expect(sseRes.status).toBe(200)
+    expect(sseRes.chunks.join('')).toContain('"type":"connected"')
+    const listenersDuringSse = store.listenerCount('update')
+    store.appendMessage(seeded.swarm_id, { agent: 'coordinator', text: 'Ping SSE' })
+    expect(sseRes.chunks.join('')).toContain('"type":"swarm_update"')
+    sseReq.emit('close')
+    expect(store.listenerCount('update')).toBeLessThan(listenersDuringSse)
+
+    disposeRoutes()
+    await pool.dispose()
+  })
+})

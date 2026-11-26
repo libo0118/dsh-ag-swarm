@@ -1,0 +1,14 @@
+import type { Context } from '@deepseek-ai/cordis';
+import { Config, PLUGIN_VERSION } from './config.js';
+import type { SwarmConfig } from './shared/protocol.js';
+export declare const name = "dsh-ag-swarm";
+export { Config, PLUGIN_VERSION };
+export type { SwarmConfig };
+export { SwarmStore } from './core/store.js';
+export { buildSnapshot } from './core/projection.js';
+export * from './core/channels.js';
+export { WorkerPool } from './runtime/worker-pool.js';
+export { SwarmStallMonitor } from './runtime/stall-monitor.js';
+export { detectHostCapabilities, getDshHome, readSessionSeed, registerMessageSourceCompat, selectAgentModelCompat, startSubagentCompat, } from './runtime/dsh-adapter.js';
+export { cleanupWorkspace, prepareWorkspace } from './runtime/workspace.js';
+export declare function apply(ctx: Context, rawConfig?: Partial<SwarmConfig>): void;

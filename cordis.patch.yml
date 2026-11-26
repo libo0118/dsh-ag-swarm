@@ -1,0 +1,14 @@
+# dsh-ag-swarm bundle patch: mounts the Antigravity-style multi-agent swarm service.
+# NOTE: `!!js dshHomePath(...)` must remain UNQUOTED so DSH evaluates it at config load time.
+
+- insert:
+    - id: ag-swarm
+      name: dsh-ag-swarm
+      config:
+        storageDir: !!js dshHomePath("storages/ag-swarm")
+        maxWorkers: 12
+        maxDepth: 2
+        stallCheckIntervalMs: 180000
+        enableStallMonitor: true
+        enableWorktrees: true
+        registerSwarmCommandAlias: false
