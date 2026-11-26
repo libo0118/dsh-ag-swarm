@@ -384,13 +384,20 @@ function computeSystemAttention(state: SwarmState, stuckSet: Set<string>): Atten
   return items
 }
 
-function findStallBanner(messages: BoardMessage[]): SwarmSnapshotPayload['stallBanner'] {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]
+function findStallBanner(state: SwarmState): SwarmSnapshotPayload['stallBanner'] {
+  const hasWorkingMember = Object.values(state.members).some(
+    (m) => !isKilled(m) && !isRoleOnlyMember(m.name, m) && m.state === 'working',
+  )
+  if (hasWorkingMember) return null
+
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const m = state.messages[i]
     if (isControlMessage(m)) continue
     if (m.kind === 'stall' || STALL_TAG_RE.test(m.text)) {
       return { seq: m.seq, agent: m.agent, text: m.text, time: m.time }
     }
+    // Any non-control board activity after a historical [stall] clears the stale banner.
+    return null
   }
   return null
 }
@@ -479,7 +486,7 @@ export function buildSnapshot(state: SwarmState, options: BuildSnapshotOptions =
   const edges = computeEdges(state)
   const frames = extractValidFrames(state)
   const systemAttention = computeSystemAttention(state, stuckSet)
-  const stallBanner = findStallBanner(state.messages)
+  const stallBanner = findStallBanner(state)
 
   const allMembers = Object.values(state.members)
   const activeMembers = allMembers.filter((m) => !isKilled(m))

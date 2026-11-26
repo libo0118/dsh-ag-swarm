@@ -258,7 +258,7 @@ describe('buildSnapshot projection', () => {
     expect(full.messagesOffset).toBe(5)
     expect(full.pinnedMessages.map((m) => m.seq)).toContain(brief.seq)
     expect(full.pinnedMessages.map((m) => m.seq)).toContain(stall.seq)
-    expect(full.stallBanner?.seq).toBe(stall.seq)
+    expect(full.stallBanner).toBeNull()
 
     const unchanged = buildSnapshot(store.getSwarm(swarm.swarm_id)!, { etag: full.etag })
     expect(unchanged.unchanged).toBe(true)
@@ -385,5 +385,35 @@ describe('buildSnapshot projection', () => {
     const snap = buildSnapshot(store.getSwarm(swarm.swarm_id)!, { now })
     expect(snap.stats.stuckCount).toBe(1)
     expect(snap.systemAttention.map((a) => `${a.member}:${a.kind}`)).toEqual(['silent-runner:stuck'])
+  })
+
+  it('v0.1.10: clears stallBanner as soon as any worker is working or new non-control board posts arrive', () => {
+    const dir = makeTempDir()
+    const store = new SwarmStore(dir)
+    const swarm = store.createOrGetSwarm('sess-stall-clear', 'Stall Banner Clear')
+    store.updateMember(swarm.swarm_id, 'coordinator', { state: 'waiting' })
+    store.addMember(swarm.swarm_id, { name: 'worker-1', state: 'waiting' })
+    store.addMember(swarm.swarm_id, { name: 'monitor', role: 'monitor', state: 'waiting' })
+
+    const stallMsg = store.appendMessage(swarm.swarm_id, {
+      agent: 'monitor',
+      text: '@worker-1 [stall] #1 is for you',
+      kind: 'stall',
+    })
+
+    // 1) Everyone idle and latest non-control post is [stall] -> banner visible
+    const stalledSnap = buildSnapshot(store.getSwarm(swarm.swarm_id)!)
+    expect(stalledSnap.stallBanner?.seq).toBe(stallMsg.seq)
+
+    // 2) Any active worker resumes working -> banner clears immediately
+    store.updateMember(swarm.swarm_id, 'worker-1', { state: 'working' })
+    const activeSnap = buildSnapshot(store.getSwarm(swarm.swarm_id)!)
+    expect(activeSnap.stallBanner).toBeNull()
+
+    // 3) Worker returns to waiting after posting a new update -> historical [stall] stays cleared
+    store.updateMember(swarm.swarm_id, 'worker-1', { state: 'waiting' })
+    store.appendMessage(swarm.swarm_id, { agent: 'worker-1', text: '@coordinator resumed and posted progress' })
+    const resumedSnap = buildSnapshot(store.getSwarm(swarm.swarm_id)!)
+    expect(resumedSnap.stallBanner).toBeNull()
   })
 })
