@@ -45,6 +45,7 @@ export interface MemberRecord {
   task_hint?: string
   activity?: string
   activity_kind?: 'tool' | 'thinking' | 'wakeup' | 'idle' | 'error'
+  last_activity_at?: string
   steps_count?: number
   waiting_on?: string[]
   failure?: { kind: 'error' | 'quota' | 'stuck'; message: string; at: string }

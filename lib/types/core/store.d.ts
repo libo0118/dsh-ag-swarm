@@ -41,6 +41,7 @@ export interface AddMemberInput {
     created_by?: string;
     depth?: number;
     task_hint?: string;
+    last_activity_at?: string;
 }
 export interface AppendMessageInput {
     agent: string;

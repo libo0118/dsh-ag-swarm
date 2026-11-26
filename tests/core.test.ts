@@ -291,7 +291,10 @@ describe('buildSnapshot projection', () => {
 
     store.updateMember(swarm.swarm_id, 'err-worker', { failure: { kind: 'quota', message: '0% quota', at: new Date(now).toISOString() } })
     store.updateMember(swarm.swarm_id, 'wait-worker', { waiting_on: ['run-worker'] })
-    store.updateMember(swarm.swarm_id, 'stuck-worker', { last_post_time: new Date(now - 15 * 60 * 1000).toISOString() })
+    store.updateMember(swarm.swarm_id, 'stuck-worker', {
+      last_post_time: new Date(now - 15 * 60 * 1000).toISOString(),
+      last_activity_at: new Date(now - 15 * 60 * 1000).toISOString(),
+    })
     store.updateMember(swarm.swarm_id, 'run-worker', { last_post_time: new Date(now - 60 * 1000).toISOString(), activity: 'Running tests' })
 
     store.createChannel(swarm.swarm_id, { channel: 'qa', creator: 'coordinator', subscribers: ['done-worker'] })
@@ -350,5 +353,37 @@ describe('buildSnapshot projection', () => {
     expect(snap.frames).toHaveLength(24)
     expect(snap.frames[0].path).toBe('/virtual/shot-5.png')
     expect(snap.frames[23].path).toBe('/virtual/shot-28.png')
+  })
+
+  it('v0.1.4: prevents false-positive stuck alerts when step/tool heartbeat is recent or re-mentioned', () => {
+    const dir = makeTempDir()
+    const store = new SwarmStore(dir)
+    const swarm = store.createOrGetSwarm('sess-heartbeat', 'Heartbeat Test')
+    const now = Date.now()
+    const oldTs = new Date(now - 20 * 60 * 1000).toISOString()
+
+    // 1) Worker whose last board post was 20m ago, but executed a step/tool recently (last_activity_at = now)
+    store.addMember(swarm.swarm_id, { name: 'tool-runner', state: 'working', last_activity_at: oldTs })
+    store.updateMember(swarm.swarm_id, 'tool-runner', {
+      last_post_time: oldTs,
+      steps_count: 74,
+      activity: 'Step #74 · ops_bash',
+      activity_kind: 'tool',
+    })
+
+    // 2) Worker mentioned 20m ago and re-mentioned 1m ago -> uses latest mention timestamp
+    store.addMember(swarm.swarm_id, { name: 'remention-runner', state: 'working', last_activity_at: oldTs })
+    store.appendMessage(swarm.swarm_id, { agent: 'coordinator', text: '@remention-runner old brief' })
+    const s = store.getSwarm(swarm.swarm_id)!
+    s.messages[s.messages.length - 1]!.ts = now - 20 * 60 * 1000
+    store.appendMessage(swarm.swarm_id, { agent: 'coordinator', text: '@remention-runner fresh wakeup' })
+    s.messages[s.messages.length - 1]!.ts = now - 60 * 1000
+
+    // 3) Truly silent worker (>15m with no step, tool, or board activity)
+    store.addMember(swarm.swarm_id, { name: 'silent-runner', state: 'working', last_activity_at: oldTs })
+
+    const snap = buildSnapshot(store.getSwarm(swarm.swarm_id)!, { now })
+    expect(snap.stats.stuckCount).toBe(1)
+    expect(snap.systemAttention.map((a) => `${a.member}:${a.kind}`)).toEqual(['silent-runner:stuck'])
   })
 })

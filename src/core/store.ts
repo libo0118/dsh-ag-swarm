@@ -69,6 +69,7 @@ export interface AddMemberInput {
   created_by?: string
   depth?: number
   task_hint?: string
+  last_activity_at?: string
 }
 
 export interface AppendMessageInput {
@@ -496,6 +497,7 @@ export class SwarmStore extends EventEmitter {
       created_by: input.created_by ?? existing?.created_by,
       depth: input.depth ?? existing?.depth ?? (isCoordinator ? 0 : 1),
       task_hint: input.task_hint ?? existing?.task_hint,
+      last_activity_at: input.last_activity_at ?? existing?.last_activity_at ?? new Date().toISOString(),
     }
     state.members[record.name] = record
     for (const chName of channels) {
@@ -519,6 +521,13 @@ export class SwarmStore extends EventEmitter {
     if (patch.killed === true || patch.state === 'killed') {
       updated.killed = true
       updated.state = 'killed'
+    } else if (
+      patch.last_activity_at === undefined &&
+      (patch.state === 'working' ||
+        patch.steps_count !== undefined ||
+        (patch.activity !== undefined && patch.activity_kind !== 'idle' && patch.activity_kind !== 'error'))
+    ) {
+      updated.last_activity_at = new Date().toISOString()
     }
     state.members[name] = updated
     state.updated_at = new Date().toISOString()
@@ -729,6 +738,7 @@ export class SwarmStore extends EventEmitter {
     if (poster && kind !== 'control') {
       poster.last_post_seq = seq
       poster.last_post_time = time
+      poster.last_activity_at = time
       if (kind !== 'stall' && poster.failure) {
         poster.failure = undefined
         if (poster.activity_kind === 'error') poster.activity_kind = 'idle'

@@ -658,27 +658,39 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
     <div className="ag-o2">
       {snapshot.systemAttention.length > 0 && (
         <div className="ag-ov-system" data-testid="swarm-attention-list">
-          {snapshot.systemAttention.map((item) => (
-            <div
-              key={item.id}
-              className={`ag-ov-sys ${item.kind === 'error' || item.kind === 'quota' ? 'error' : ''}`}
-            >
-              <span className="ag-ov-sys-dot" aria-hidden="true" />
-              <div className="ag-ov-sys-body">
-                <div className="ag-ov-sys-title">{item.title}</div>
-                <div className="ag-ov-sys-detail">{item.detail}</div>
+          {snapshot.systemAttention.map((item) => {
+            const titleText = zh
+              ? item.kind === 'stuck'
+                ? t('overview.stuckAlert', { name: item.member })
+                : item.kind === 'quota'
+                  ? `@${item.member} 触发配额限制`
+                  : `@${item.member} 执行出错`
+              : item.title
+            const detailText = zh && item.kind === 'stuck'
+              ? '超过 10 分钟无步骤、工具或黑板更新'
+              : item.detail
+            return (
+              <div
+                key={item.id}
+                className={`ag-ov-sys ${item.kind === 'error' || item.kind === 'quota' ? 'error' : ''}`}
+              >
+                <span className="ag-ov-sys-dot" aria-hidden="true" />
+                <div className="ag-ov-sys-body">
+                  <div className="ag-ov-sys-title">{titleText}</div>
+                  <div className="ag-ov-sys-detail">{detailText}</div>
+                </div>
+                {item.seq ? (
+                  <button type="button" className="ag-o2-sttag" onClick={() => onJumpToSeq(item.seq!)}>
+                    #{item.seq}
+                  </button>
+                ) : (
+                  <button type="button" className="ag-ghost-btn" onClick={() => onSwitchTab('members')}>
+                    @{item.member}
+                  </button>
+                )}
               </div>
-              {item.seq ? (
-                <button type="button" className="ag-o2-sttag" onClick={() => onJumpToSeq(item.seq!)}>
-                  #{item.seq}
-                </button>
-              ) : (
-                <button type="button" className="ag-ghost-btn" onClick={() => onSwitchTab('members')}>
-                  @{item.member}
-                </button>
-              )}
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

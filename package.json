@@ -1,6 +1,6 @@
 {
   "name": "dsh-ag-swarm",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Antigravity-style multi-agent swarm plugin for DeepSeek Harness (DSH): persistent parallel agents, shared channel blackboard, @mention doorbell wakeups, worktree isolation, stall monitor, and full 5-tab Hive/Board/Members/Graph/Raw Web UI.",
   "license": "MIT",
   "repository": {

@@ -231,7 +231,7 @@ function computeStuckMembers(state: SwarmState, nowMs: number): Set<string> {
     if (ts > 0) {
       lastActivityTs.set(msg.agent, Math.max(lastActivityTs.get(msg.agent) ?? 0, ts))
       for (const m of msg.mentions) {
-        if (!lastActivityTs.has(m)) lastActivityTs.set(m, ts)
+        lastActivityTs.set(m, Math.max(lastActivityTs.get(m) ?? 0, ts))
       }
     }
   }
@@ -246,7 +246,8 @@ function computeStuckMembers(state: SwarmState, nowMs: number): Set<string> {
     if (member.state !== 'working') continue
     const postTs = parseTimeMs(member.last_post_time)
     const msgTs = lastActivityTs.get(member.name) ?? 0
-    const memberLastTs = postTs > 0 || msgTs > 0 ? Math.max(postTs, msgTs) : fallbackTs
+    const actTs = parseTimeMs(member.last_activity_at)
+    const memberLastTs = postTs > 0 || msgTs > 0 || actTs > 0 ? Math.max(postTs, msgTs, actTs) : fallbackTs
     if (memberLastTs > 0 && nowMs - memberLastTs > STUCK_THRESHOLD_MS) {
       stuck.add(member.name)
     }
@@ -376,7 +377,7 @@ function computeSystemAttention(state: SwarmState, stuckSet: Set<string>): Atten
         severity: 'med',
         member: m.name,
         title: `@${m.name} appears stuck`,
-        detail: 'Working for more than 10 minutes without a board update',
+        detail: 'No step, tool, or board activity for more than 10 minutes',
       })
     }
   }
