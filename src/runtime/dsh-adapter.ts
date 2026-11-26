@@ -2,11 +2,15 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type {
+  HostAgentContextLike,
   HostAgentLike,
+  HostAgentPresetsLike,
   HostAgentsLike,
   HostConnectionLike,
   HostMessageSourceMapLike,
+  HostPermissionPresetsLike,
   HostProfileContextLike,
+  HostSandboxPolicyLike,
   HostSessionQueryLike,
   HostSubagentsLike,
   PluginContextLike,
@@ -168,13 +172,26 @@ export interface ParentAgentInheritance {
   agentPreset?: string
 }
 
+export interface DelegatedPolicyOverrides {
+  permissionPreset?: 'auto' | 'danger-full-access'
+  sandboxMode?: string
+  approvalPolicy?: string
+}
+
+function normalizePresetName(raw: unknown): string | undefined {
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : undefined
+}
+
 export function resolveParentAgentOptions(parent?: HostAgentLike): ParentAgentInheritance {
   const baseOptions = parent?.options && typeof parent.options === 'object' ? { ...parent.options } : {}
   const requestConfig = typeof parent?.session?.requestHeader === 'function'
     ? parent.session.requestHeader()?.config
     : undefined
-  const headerPreset = parent?.session?.header?.agentPreset
-  const agentPreset = typeof headerPreset === 'string' && headerPreset.trim().length > 0 ? headerPreset.trim() : undefined
+  const presets = parent?.ctx?.get?.<HostAgentPresetsLike>('agentPresets')
+  const agentPreset =
+    normalizePresetName(presets?.composedPreset?.(parent?.ctx)) ??
+    normalizePresetName(presets?.presetForSession?.(parent?.session)) ??
+    normalizePresetName(parent?.session?.header?.agentPreset)
 
   if (!requestConfig || typeof requestConfig !== 'object') {
     return { agentOptions: baseOptions, agentPreset }
@@ -189,6 +206,92 @@ export function resolveParentAgentOptions(parent?: HostAgentLike): ParentAgentIn
       : {}),
   }
   return { agentOptions: merged, agentPreset }
+}
+
+export function captureDelegatedPolicyOverridesCompat(parent?: HostAgentLike): DelegatedPolicyOverrides | undefined {
+  const parentCtx = parent?.ctx
+  const parentSession = parent?.session
+  if (!parentCtx || !parentSession) return undefined
+
+  const preset = parentCtx.get?.<HostPermissionPresetsLike>('permissionPresets')?.current?.(parentSession)
+  const permissionPreset = preset === 'auto' || preset === 'danger-full-access' ? preset : undefined
+  const sandboxMode = parentCtx.get?.<HostSandboxPolicyLike>('sandboxPolicy')?.overrideOf?.(parentSession)
+  const approvalPolicy = parentCtx.get?.('approval') !== undefined ? 'never' : undefined
+
+  if (permissionPreset === undefined && sandboxMode === undefined && approvalPolicy === undefined) {
+    return undefined
+  }
+  return {
+    ...(permissionPreset !== undefined ? { permissionPreset } : {}),
+    ...(sandboxMode !== undefined ? { sandboxMode } : {}),
+    ...(approvalPolicy !== undefined ? { approvalPolicy } : {}),
+  }
+}
+
+export function appendDelegatedPolicyOverridesCompat(
+  childSession: HostAgentLike['session'] | undefined,
+  overrides?: DelegatedPolicyOverrides,
+): void {
+  if (!overrides || typeof childSession?.append !== 'function') return
+  if (overrides.sandboxMode !== undefined) {
+    childSession.append('sandbox/mode', { mode: overrides.sandboxMode, source: 'delegation' })
+  }
+  if (overrides.approvalPolicy !== undefined) {
+    childSession.append('approval/policy', { policy: overrides.approvalPolicy, source: 'delegation' })
+  }
+  if (overrides.permissionPreset !== undefined) {
+    childSession.append('permission/preset', { preset: overrides.permissionPreset })
+  }
+}
+
+export async function composeChildAgentPresetCompat(options: {
+  childCtx?: HostAgentContextLike
+  fallbackCtx?: PluginContextLike
+  parentAgent?: HostAgentLike
+  childSession?: HostAgentLike['session']
+  explicitPreset?: string
+  logger?: { warn: (...a: unknown[]) => void }
+}): Promise<string | undefined> {
+  const { childCtx, fallbackCtx, parentAgent, childSession, explicitPreset, logger } = options
+  if (!childCtx) return undefined
+  const presets = childCtx.get?.<HostAgentPresetsLike>('agentPresets') ?? fallbackCtx?.get<HostAgentPresetsLike>('agentPresets')
+  if (!presets) return undefined
+
+  const explicit = normalizePresetName(explicitPreset)
+  if (explicit && typeof presets.mount === 'function') {
+    try {
+      await presets.mount(childCtx, explicit)
+      return explicit
+    } catch (err) {
+      logger?.warn('ag-swarm: agentPresets.mount(%s) failed: %s', explicit, String(err))
+    }
+  }
+
+  if (parentAgent?.ctx && typeof presets.composeFrom === 'function') {
+    try {
+      const joined = normalizePresetName(presets.composeFrom(childCtx, parentAgent.ctx))
+      if (joined) return joined
+    } catch (err) {
+      logger?.warn('ag-swarm: agentPresets.composeFrom failed: %s', String(err))
+    }
+  }
+
+  const candidate =
+    normalizePresetName(presets.presetForSession?.(childSession)) ??
+    normalizePresetName(childSession?.header?.agentPreset) ??
+    normalizePresetName(parentAgent?.session?.header?.agentPreset) ??
+    normalizePresetName(presets.defaultId)
+
+  if (candidate && typeof presets.mount === 'function') {
+    try {
+      await presets.mount(childCtx, candidate)
+      return candidate
+    } catch (err) {
+      logger?.warn('ag-swarm: agentPresets.mount(%s) failed: %s', candidate, String(err))
+      return undefined
+    }
+  }
+  return undefined
 }
 
 export function registerMessageSourceCompat(ctx?: PluginContextLike): () => void {

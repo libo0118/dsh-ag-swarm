@@ -1,4 +1,4 @@
-import type { HostAgentLike, PluginContextLike } from '../types/dsh-host.js';
+import type { HostAgentContextLike, HostAgentLike, PluginContextLike } from '../types/dsh-host.js';
 export declare const PLUGIN_MESSAGE_SOURCE_KIND: "plugin:dsh-ag-swarm";
 export interface HostCapabilities {
     agents: {
@@ -71,7 +71,24 @@ export interface ParentAgentInheritance {
     agentOptions: Record<string, unknown>;
     agentPreset?: string;
 }
+export interface DelegatedPolicyOverrides {
+    permissionPreset?: 'auto' | 'danger-full-access';
+    sandboxMode?: string;
+    approvalPolicy?: string;
+}
 export declare function resolveParentAgentOptions(parent?: HostAgentLike): ParentAgentInheritance;
+export declare function captureDelegatedPolicyOverridesCompat(parent?: HostAgentLike): DelegatedPolicyOverrides | undefined;
+export declare function appendDelegatedPolicyOverridesCompat(childSession: HostAgentLike['session'] | undefined, overrides?: DelegatedPolicyOverrides): void;
+export declare function composeChildAgentPresetCompat(options: {
+    childCtx?: HostAgentContextLike;
+    fallbackCtx?: PluginContextLike;
+    parentAgent?: HostAgentLike;
+    childSession?: HostAgentLike['session'];
+    explicitPreset?: string;
+    logger?: {
+        warn: (...a: unknown[]) => void;
+    };
+}): Promise<string | undefined>;
 export declare function registerMessageSourceCompat(ctx?: PluginContextLike): () => void;
 export declare function unwrapAgentHandle(maybeHandle: unknown): UnwrappedAgentHandle | undefined;
 export declare function startSubagentCompat(ctx: PluginContextLike, input: SubagentStartInput): Promise<SubagentStartHandle>;

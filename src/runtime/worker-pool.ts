@@ -19,14 +19,20 @@ import {
 import { ModelPresetStore, resolveModelForWorker } from '../core/model-presets.js'
 import type { SwarmState, SwarmStore } from '../core/store.js'
 import type {
+  HostAgentContextLike,
   HostAgentLike,
+  HostAgentPresetsLike,
   HostAgentsLike,
   HostSubagentsLike,
+  HostWorkingDirectoryLike,
   PluginContextLike,
 } from '../types/dsh-host.js'
 import {
+  appendDelegatedPolicyOverridesCompat,
   buildPluginUserMessage,
   buildUserKickoffMessage,
+  captureDelegatedPolicyOverridesCompat,
+  composeChildAgentPresetCompat,
   readSessionSeed,
   resolveParentAgentOptions,
   selectAgentModelCompat,
@@ -702,6 +708,17 @@ export class WorkerPool {
     signal?: AbortSignal
   }): Promise<MemberRecord> {
     const { swarm, workerName, brief } = params
+    const agents = this.ctx.get<HostAgentsLike>('agents')
+    const parentAgent = params.callerAgent ?? agents?.get?.(swarm.session_id)
+    // Capture parent permission overrides synchronously before the first await.
+    const delegatedPolicies = captureDelegatedPolicyOverridesCompat(parentAgent)
+    const inherited = resolveParentAgentOptions(parentAgent)
+    const fallbackDefaultPreset = this.ctx.get<HostAgentPresetsLike>('agentPresets')?.defaultId
+    const effectivePreset = inherited.agentPreset
+      ?? (typeof fallbackDefaultPreset === 'string' && fallbackDefaultPreset.trim().length > 0
+        ? fallbackDefaultPreset.trim()
+        : undefined)
+
     const prepared = await prepareWorkspace({
       ctx: this.ctx,
       swarmId: swarm.swarm_id,
@@ -710,7 +727,7 @@ export class WorkerPool {
       baseCwd: params.baseCwd,
       storageDir: this.config.storageDir,
       enableWorktrees: this.config.enableWorktrees,
-      parentAgent: params.callerAgent,
+      parentAgent: parentAgent,
       signal: params.signal,
     })
 
@@ -723,7 +740,6 @@ export class WorkerPool {
       workerName,
       presets: this.modelPresets.getAll(),
     })
-    const inherited = resolveParentAgentOptions(params.callerAgent)
     const parentModel = typeof inherited.agentOptions.model === 'string' ? inherited.agentOptions.model : undefined
     const parentProvider = typeof inherited.agentOptions.provider === 'string' ? inherited.agentOptions.provider : undefined
     const callerMember = swarm.members[params.callerName]
@@ -796,9 +812,8 @@ export class WorkerPool {
       delete agentOptions.reasoningEffort
     }
 
-    const agents = this.ctx.get<HostAgentsLike>('agents')
     if (typeof agents?.create === 'function') {
-      const parentSession = params.callerAgent?.session?.id ?? params.callerAgent?.id ?? swarm.session_id
+      const parentSession = parentAgent?.session?.id ?? parentAgent?.id ?? swarm.session_id
       const rawHandle = await agents.create({
         sessionId,
         meta: {
@@ -807,7 +822,7 @@ export class WorkerPool {
           isSeeded: Boolean(params.forkSeed && params.forkSeed.seed.length > 0),
           origin: 'subagent',
           delegationDepth: params.depth,
-          ...(inherited.agentPreset ? { agentPreset: inherited.agentPreset } : {}),
+          ...(effectivePreset ? { agentPreset: effectivePreset } : {}),
         },
         ...(params.forkSeed && params.forkSeed.seed.length > 0
           ? {
@@ -817,8 +832,26 @@ export class WorkerPool {
           : {}),
         ...(Object.keys(agentOptions).length > 0 ? { agentOptions } : {}),
         signal: params.signal,
-        setup: (agentCtx: unknown) => {
-          const sp = (agentCtx as { systemPrompt?: { context?: (opts: Record<string, unknown>) => void } })?.systemPrompt
+        setup: async (agentCtx: unknown, child?: unknown) => {
+          const typedCtx = agentCtx as HostAgentContextLike | undefined
+          const childAgent = child as HostAgentLike | undefined
+          appendDelegatedPolicyOverridesCompat(childAgent?.session, delegatedPolicies)
+          const wd = typedCtx?.get?.<HostWorkingDirectoryLike>('workingDirectory')
+          if (childAgent && prepared.workspace && typeof wd?.set === 'function') {
+            try {
+              await wd.set(childAgent, prepared.workspace, params.signal)
+            } catch (err) {
+              this.ctx.logger?.('ag-swarm').warn('workingDirectory.set failed for @%s: %s', workerName, String(err))
+            }
+          }
+          await composeChildAgentPresetCompat({
+            childCtx: typedCtx,
+            fallbackCtx: this.ctx,
+            parentAgent,
+            childSession: childAgent?.session,
+            logger: this.ctx.logger?.('ag-swarm'),
+          })
+          const sp = typedCtx?.systemPrompt
           if (typeof sp?.context === 'function') {
             sp.context({ name: 'ag-swarm:worker', order: 900, text: persona })
           }
@@ -970,6 +1003,8 @@ export class WorkerPool {
         let resumedRaw: unknown
         try {
           // DSH v0.2.2-rc.3 signature: resume({ resumeSessionId, ... })
+          const coordAgent = agents?.get?.(swarm.session_id)
+          const persona = buildWorkerPersona(member.name, swarm.swarm_id, member.workspace, member.workspace_mode)
           resumedRaw = await (agents.resume as unknown as (opts: Record<string, unknown>) => Promise<unknown>)({
             resumeSessionId: convId,
             ...(member.model && member.model !== 'default'
@@ -981,6 +1016,21 @@ export class WorkerPool {
                   },
                 }
               : {}),
+            setup: async (agentCtx: unknown, child?: unknown) => {
+              const typedCtx = agentCtx as HostAgentContextLike | undefined
+              const childAgent = child as HostAgentLike | undefined
+              await composeChildAgentPresetCompat({
+                childCtx: typedCtx,
+                fallbackCtx: this.ctx,
+                parentAgent: coordAgent,
+                childSession: childAgent?.session,
+                logger: this.ctx.logger?.('ag-swarm'),
+              })
+              const sp = typedCtx?.systemPrompt
+              if (typeof sp?.context === 'function') {
+                sp.context({ name: 'ag-swarm:worker', order: 900, text: persona })
+              }
+            },
           })
         } catch {
           // Legacy / mock signature: resume(sessionId, options)

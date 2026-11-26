@@ -27,7 +27,15 @@ import type { HostAgentLike, PluginContextLike } from '../src/types/dsh-host.js'
 
 class MockAgent implements HostAgentLike {
   status: 'idle' | 'running' = 'idle'
-  session: { id: string; header: Record<string, unknown>; events: unknown[]; snapshotEvents: () => unknown[] }
+  ctx?: { get?: <T = unknown>(name: string) => T | undefined; systemPrompt?: { context?: (opts: Record<string, unknown>) => void } }
+  session: {
+    id: string
+    header: Record<string, unknown>
+    events: unknown[]
+    snapshotEvents: () => unknown[]
+    append?: (type: string, data: Record<string, unknown>) => void
+  }
+  appendedEvents: Array<{ type: string; data: Record<string, unknown> }> = []
   steered: unknown[] = []
   followups: unknown[] = []
   modelSelections: Array<{ provider?: string; model: string; reasoningEffort?: string }> = []
@@ -43,12 +51,17 @@ class MockAgent implements HostAgentLike {
     public id: string,
     cwd: string,
     seedEvents: unknown[] = [],
+    headerExtra: Record<string, unknown> = {},
   ) {
     this.session = {
       id,
-      header: { cwd },
+      header: { cwd, ...headerExtra },
       events: [...seedEvents],
       snapshotEvents: () => [...this.session.events],
+      append: (type: string, data: Record<string, unknown>) => {
+        this.appendedEvents.push({ type, data })
+        this.session.events.push({ type, data })
+      },
     }
   }
 
@@ -80,6 +93,9 @@ class MockHostContext extends EventEmitter implements PluginContextLike {
   routeHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<void> | void) | undefined
   admitResult: unknown = { peer: { id: 'test-peer' } }
 
+  resumeSetupContextFactory: ((id: string, agent: MockAgent) => unknown) | undefined
+  createSetupContextFactory: ((id: string, agent: MockAgent) => unknown) | undefined
+
   constructor(cwd: string) {
     super()
     this.services.set('agents', {
@@ -89,10 +105,11 @@ class MockHostContext extends EventEmitter implements PluginContextLike {
         const id = String(opts.sessionId || `agent-${this.agentsMap.size + 1}`)
         const meta = (opts.meta ?? {}) as Record<string, unknown>
         const seed = Array.isArray(opts.seed) ? opts.seed : []
-        const agent = new MockAgent(id, String(meta.cwd || cwd), seed)
+        const agent = new MockAgent(id, String(meta.cwd || cwd), seed, meta.agentPreset ? { agentPreset: meta.agentPreset } : {})
         this.agentsMap.set(id, agent)
         if (typeof opts.setup === 'function') {
-          await (opts.setup as (c: unknown, a: unknown) => unknown)({}, agent)
+          const setupCtx = this.createSetupContextFactory ? this.createSetupContextFactory(id, agent) : {}
+          await (opts.setup as (c: unknown, a: unknown) => unknown)(setupCtx, agent)
         }
         return {
           agent,
@@ -105,8 +122,13 @@ class MockHostContext extends EventEmitter implements PluginContextLike {
       resume: async (arg: unknown) => {
         this.resumedCalls.push(arg)
         const id = typeof arg === 'string' ? arg : String((arg as { resumeSessionId?: string }).resumeSessionId)
-        const agent = new MockAgent(id, cwd)
+        const existing = this.agentsMap.get(id)
+        const agent = existing ?? new MockAgent(id, cwd)
         this.agentsMap.set(id, agent)
+        if (arg && typeof arg === 'object' && typeof (arg as { setup?: unknown }).setup === 'function') {
+          const setupCtx = this.resumeSetupContextFactory ? this.resumeSetupContextFactory(id, agent) : {}
+          await ((arg as { setup: (c: unknown, a: unknown) => unknown }).setup)(setupCtx, agent)
+        }
         return {
           agent,
           dispose: async () => {
@@ -1203,5 +1225,110 @@ describe('/swarm primary command, WorkerPool presets & /api/model-presets routes
 
     disposeRoutes()
     await pool.dispose()
+  })
+
+  it('v0.1.8: binds DSH agentPresets scope, delegated permissions, workingDirectory, and prompt context on worker create and cold resume', async () => {
+    const storageDir = makeTempDir('ag-v018-store-')
+    const cwd = makeTempDir('ag-v018-cwd-')
+    const ctx = new MockHostContext(cwd)
+
+    const composeFromSpy = vi.fn(() => 'standard')
+    const mountSpy = vi.fn(async () => ({ id: 'standard' }))
+    const wdSetSpy = vi.fn(async () => cwd)
+    const contextPrompts: Array<{ id: string; opts: Record<string, unknown> }> = []
+
+    const presetsSvc = {
+      defaultId: 'standard',
+      composedPreset: () => 'standard',
+      presetForSession: (session: unknown) => (session as { header?: { agentPreset?: string } } | undefined)?.header?.agentPreset,
+      composeFrom: composeFromSpy,
+      mount: mountSpy,
+    }
+    const parentCtx = {
+      get: (<T = unknown>(name: string): T | undefined => {
+        if (name === 'agentPresets') return presetsSvc as unknown as T
+        if (name === 'permissionPresets') return { current: () => 'danger-full-access' } as unknown as T
+        if (name === 'sandboxPolicy') return { overrideOf: () => 'danger-full-access' } as unknown as T
+        if (name === 'approval') return {} as unknown as T
+        return undefined
+      }),
+    }
+
+    const coord = new MockAgent('coord-v018', cwd, [], { agentPreset: 'standard' })
+    coord.ctx = parentCtx
+    ctx.agentsMap.set(coord.id, coord)
+
+    ctx.createSetupContextFactory = (id) => ({
+      get: (name: string) => {
+        if (name === 'agentPresets') return presetsSvc
+        if (name === 'workingDirectory') return { set: wdSetSpy }
+        return undefined
+      },
+      systemPrompt: {
+        context: (opts: Record<string, unknown>) => contextPrompts.push({ id, opts }),
+      },
+    })
+    ctx.resumeSetupContextFactory = (id) => ({
+      get: (name: string) => (name === 'agentPresets' ? presetsSvc : undefined),
+      systemPrompt: {
+        context: (opts: Record<string, unknown>) => contextPrompts.push({ id, opts }),
+      },
+    })
+
+    const store = new SwarmStore(storageDir)
+    const pool = new WorkerPool(ctx, store, resolveSwarmConfig({ storageDir, enableWorktrees: false }))
+    const swarm = pool.ensureSwarmForSession(coord.id, 'Preset Inheritance', cwd, coord)
+
+    // 1) Spawn worker: inherits preset, delegated permissions, working directory, and worker persona
+    const [w1] = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      callerAgent: coord,
+      name: 'coder-1',
+      brief: 'Implement feature',
+    })
+    const createdMeta = ctx.createdCalls[0]?.meta as Record<string, unknown>
+    expect(createdMeta?.agentPreset).toBe('standard')
+    expect(composeFromSpy).toHaveBeenCalledWith(expect.anything(), coord.ctx)
+    expect(wdSetSpy).toHaveBeenCalledWith(expect.objectContaining({ id: w1.conversation_id }), w1.workspace, undefined)
+
+    const workerAgent = ctx.agentsMap.get(w1.conversation_id)!
+    expect(workerAgent.appendedEvents).toEqual([
+      { type: 'sandbox/mode', data: { mode: 'danger-full-access', source: 'delegation' } },
+      { type: 'approval/policy', data: { policy: 'never', source: 'delegation' } },
+      { type: 'permission/preset', data: { preset: 'danger-full-access' } },
+    ])
+    expect(contextPrompts.some((p) => p.id === w1.conversation_id && p.opts.name === 'ag-swarm:worker')).toBe(true)
+
+    // 2) Cold resume: re-mounts preset and restores worker persona on @mention wakeup
+    mountSpy.mockClear()
+    contextPrompts.length = 0
+    await pool.dispose()
+
+    const store2 = new SwarmStore(storageDir)
+    store2.updateMember(swarm.swarm_id, 'coder-1', { state: 'stopped' })
+    const resumeCtx = new MockHostContext(cwd)
+    resumeCtx.services.set('agentPresets', presetsSvc)
+    const stoppedWorker = new MockAgent(w1.conversation_id, w1.workspace, [], { agentPreset: 'standard' })
+    resumeCtx.agentsMap.set(w1.conversation_id, stoppedWorker)
+    // Simulate cold start after DSH restart: clear live agent cache on agents.get only when waking via resume
+    const originalGet = resumeCtx.services.get('agents') as { get: (id: string) => MockAgent | undefined }
+    const origGetFn = originalGet.get
+    originalGet.get = (id: string) => (id === w1.conversation_id ? undefined : origGetFn(id))
+    resumeCtx.resumeSetupContextFactory = (id) => ({
+      get: (name: string) => (name === 'agentPresets' ? presetsSvc : undefined),
+      systemPrompt: {
+        context: (opts: Record<string, unknown>) => contextPrompts.push({ id, opts }),
+      },
+    })
+
+    const pool2 = new WorkerPool(resumeCtx, store2, resolveSwarmConfig({ storageDir, enableWorktrees: false }))
+    await pool2.postMessage(swarm.swarm_id, { agent: 'coordinator', text: '@coder-1 Please continue' })
+
+    expect(resumeCtx.resumedCalls.length).toBe(1)
+    expect(mountSpy).toHaveBeenCalledWith(expect.anything(), 'standard')
+    expect(contextPrompts.some((p) => p.id === w1.conversation_id && p.opts.name === 'ag-swarm:worker')).toBe(true)
+
+    await pool2.dispose()
   })
 })

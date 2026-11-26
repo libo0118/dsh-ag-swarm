@@ -11,14 +11,43 @@ export interface HostModelSelectionLike {
   select?: (selection: { provider?: string; model: string; reasoningEffort?: string }) => Promise<void> | void
 }
 
+export interface HostAgentPresetsLike {
+  defaultId?: string
+  composedPreset?: (ctx: unknown) => string | undefined
+  presetForSession?: (session: unknown) => string | null | undefined
+  composeFrom?: (childCtx: unknown, parentCtx: unknown) => string | undefined
+  mount?: (childCtx: unknown, id?: string) => Promise<{ id: string } | void>
+}
+
+export interface HostPermissionPresetsLike {
+  current?: (session: unknown) => string | undefined
+}
+
+export interface HostSandboxPolicyLike {
+  overrideOf?: (session: unknown) => string | undefined
+}
+
+export interface HostWorkingDirectoryLike {
+  set?: (agent: HostAgentLike, path: string, signal?: AbortSignal) => Promise<string | void> | void
+}
+
+export interface HostAgentContextLike {
+  get?: <T = unknown>(name: string) => T | undefined
+  systemPrompt?: {
+    context?: (opts: Record<string, unknown>) => void
+  }
+}
+
 export interface HostAgentLike {
   id: string
   status?: string
   options?: Record<string, unknown>
+  ctx?: HostAgentContextLike
   session?: {
     id?: string
     header?: Record<string, unknown>
     requestHeader?: () => { config?: { provider?: string; model?: string; reasoningEffort?: string } } | undefined
+    append?: (type: string, data: Record<string, unknown>) => void
   }
   model?: HostModelSelectionLike
   steer?: (message: unknown) => Promise<void> | void
