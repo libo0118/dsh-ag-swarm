@@ -226,6 +226,7 @@ export type UiActionRequest =
   | { action: 'switch_model'; swarmId: string; member: string; model: string; provider?: string; reasoningEffort?: string }
   | { action: 'kill_worker'; swarmId: string; member: string }
   | { action: 'nudge_worker'; swarmId: string; member: string; text?: string }
+  | { action: 'stop_worker'; swarmId: string; member: string }
   | { action: 'stop_workers'; swarmId: string }
   | { action: 'create_channel'; swarmId: string; channel: string; topic?: string }
   | { action: 'archive_channel'; swarmId: string; channel: string }
@@ -233,7 +234,7 @@ export type UiActionRequest =
   | { action: 'seed_demo'; sessionId?: string }
 
 export interface SseEventPayload {
-  type: 'connected' | 'swarm_update' | 'ping'
+  type: 'connected' | 'swarm_update' | 'models_updated' | 'ping'
   swarmId?: string
   sessionId?: string
   etag?: string

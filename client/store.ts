@@ -305,9 +305,29 @@ export class SwarmClientStore {
   private etag = ''
   private manualSwarmId: string | null = null
   private modelsFetched = false
+  private modelsRequestSeq = 0
+  private offRemoteModels: (() => void) | null = null
 
   setFacesGetter(getter: () => CatalogFaces): void {
     getFaces = getter
+    if (!this.stopped) {
+      this.bindRemoteModelsListener()
+    }
+  }
+
+  private bindRemoteModelsListener(): void {
+    if (this.offRemoteModels) {
+      try { this.offRemoteModels() } catch { /* ignore */ }
+      this.offRemoteModels = null
+    }
+    try {
+      const on = getFaces().remote?.$on
+      if (typeof on === 'function') {
+        this.offRemoteModels = on('llm/adapters-updated', () => {
+          void this.listModels(true)
+        })
+      }
+    } catch { /* ignore if host remote does not expose $on */ }
   }
 
   getState(): SwarmClientState {
@@ -363,14 +383,18 @@ export class SwarmClientStore {
     if (this.modelsFetched && !force && this.state.models.length > 0) {
       return this.state.models
     }
+    const seq = ++this.modelsRequestSeq
     this.patch({ modelsLoading: true })
     try {
       const models = await fetchCatalogModels()
+      if (seq !== this.modelsRequestSeq) return this.state.models
       this.modelsFetched = true
       this.patch({ models, modelsLoading: false })
       return models
     } catch {
-      this.patch({ modelsLoading: false })
+      if (seq === this.modelsRequestSeq) {
+        this.patch({ modelsLoading: false })
+      }
       return this.state.models
     }
   }
@@ -497,7 +521,8 @@ export class SwarmClientStore {
     const gen = ++this.generation
     this.patch({ sync: typeof EventSource === 'undefined' ? 'snapshot' : 'connecting', error: null })
     void this.refresh({ force: true })
-    void this.listModels()
+    void this.listModels(true)
+    this.bindRemoteModelsListener()
     this.openEventSource(gen)
     this.schedulePoll(gen)
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
@@ -553,6 +578,10 @@ export class SwarmClientStore {
           this.patch({ sync: 'live' })
           return
         }
+        if (payload.type === 'models_updated') {
+          void this.listModels(true)
+          return
+        }
         if (payload.type === 'swarm_update') {
           this.scheduleRefetch(50)
         }
@@ -598,6 +627,10 @@ export class SwarmClientStore {
     if (this.visibilityListener && typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.visibilityListener)
       this.visibilityListener = null
+    }
+    if (this.offRemoteModels) {
+      try { this.offRemoteModels() } catch { /* ignore */ }
+      this.offRemoteModels = null
     }
     this.inFlight?.abort()
     this.inFlight = null

@@ -49,6 +49,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
     selectSwarm,
     postAction,
     fetchMessagesBefore,
+    listModels,
   } = useSwarmStore(props.sessionId)
 
   const [tab, setTab] = useState<WorkspaceTab>(props.initialTab ?? 'overview')
@@ -103,6 +104,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
       else if (req.action === 'switch_model') showToast(zh ? `已切换 @${req.member} 模型` : `Switched @${req.member} model`)
       else if (req.action === 'kill_worker') showToast(zh ? `已终止 @${req.member}` : `Killed @${req.member}`)
       else if (req.action === 'nudge_worker') showToast(zh ? `已唤醒 @${req.member}` : `Nudged @${req.member}`)
+      else if (req.action === 'stop_worker') showToast(zh ? `已停止 @${req.member}（可 @唤醒继续）` : `Stopped @${req.member}`)
       else if (req.action === 'stop_workers') showToast(zh ? '已暂停全部运行中的子代理' : 'Stopped all working subagents')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -172,7 +174,10 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             className="ag-icon-btn"
             title={t('common.refresh')}
             aria-label={t('common.refresh')}
-            onClick={() => { void refresh(true) }}
+            onClick={() => {
+              void refresh(true)
+              void listModels(true)
+            }}
           >
             <svg className="ag-icon" viewBox="0 0 16 16" aria-hidden="true">
               <path d="M13 8a5 5 0 1 1-1.3-3.35M13 3v2.5h-2.5" />
@@ -184,7 +189,10 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
             className="ag-ghost-btn"
             data-testid="swarm-open-role-models"
             title={zh ? '按角色定制子代理模型' : 'Configure per-role worker models'}
-            onClick={() => setShowRoleModels(true)}
+            onClick={() => {
+              void listModels(true)
+              setShowRoleModels(true)
+            }}
           >
             {zh ? '角色模型' : 'Role Models'}
           </button>

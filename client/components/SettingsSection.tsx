@@ -62,7 +62,7 @@ export function RoleModelPresetsCard(): JSX.Element {
   useEffect(() => {
     const release = swarmClientStore.retain()
     const unsub = swarmClientStore.subscribe((next) => setStoreState(next))
-    void swarmClientStore.listModels().catch(() => {})
+    void swarmClientStore.listModels(true).catch(() => {})
     void fetch('/ag-swarm/api/config', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : null))
       .then((raw: unknown) => {
@@ -190,7 +190,7 @@ export function RoleModelPresetsCard(): JSX.Element {
     } finally {
       setSavingPresets(false)
     }
-  }, [allRoleKeys, draftPresets])
+  }, [allRoleKeys, draftPresets, catalogByKey])
 
   return (
     <div
@@ -206,13 +206,25 @@ export function RoleModelPresetsCard(): JSX.Element {
         gap: 10,
       }}
     >
-      <div>
-        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--ag-fg-muted, #5d676f)' }}>
-          {t('settings.roleModelsTitle')}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--ag-fg-muted, #5d676f)' }}>
+            {t('settings.roleModelsTitle')}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)', marginTop: 3 }}>
+            {t('settings.roleModelsDesc')}
+          </div>
         </div>
-        <div style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)', marginTop: 3 }}>
-          {t('settings.roleModelsDesc')}
-        </div>
+        <button
+          type="button"
+          className="ag-ghost-btn"
+          data-testid="swarm-refresh-models"
+          disabled={storeState.modelsLoading}
+          onClick={() => { void swarmClientStore.listModels(true) }}
+          style={{ flex: 'none', height: 26, padding: '0 8px', fontSize: 11.5 }}
+        >
+          {storeState.modelsLoading ? t('common.refreshing') : t('settings.refreshModels')}
+        </button>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

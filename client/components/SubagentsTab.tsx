@@ -112,6 +112,7 @@ export function SubagentsTab({ snapshot, initialMember, onAction, onJumpToSeq }:
   const [error, setError] = useState<string | null>(null)
   const [nudgeText, setNudgeText] = useState('')
   const [sendingNudge, setSendingNudge] = useState(false)
+  const [stoppingMap, setStoppingMap] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     if (initialMember && snapshot.members[initialMember]) setSelectedName(initialMember)
@@ -176,6 +177,21 @@ export function SubagentsTab({ snapshot, initialMember, onAction, onJumpToSeq }:
     }
   }
 
+  const handleStopWorker = async (memberName: string): Promise<void> => {
+    if (!memberName || stoppingMap[memberName]) return
+    setStoppingMap((prev) => ({ ...prev, [memberName]: true }))
+    try {
+      await onAction({ action: 'stop_worker', swarmId: snapshot.swarm_id, member: memberName })
+      if (selectedName === memberName) void fetchTrace(true)
+    } finally {
+      setStoppingMap((prev) => {
+        const next = { ...prev }
+        delete next[memberName]
+        return next
+      })
+    }
+  }
+
   if (workers.length === 0 && !coordinator) {
     return (
       <div className="ag-empty">
@@ -225,6 +241,19 @@ export function SubagentsTab({ snapshot, initialMember, onAction, onJumpToSeq }:
             #{selectedMember.last_post_seq}
           </button>
         ) : null}
+        {selectedMember && selectedMember.role !== 'coordinator' && !selectedMember.killed && selectedMember.state === 'working' && (
+          <button
+            type="button"
+            className="ag-ghost-btn"
+            data-testid="swarm-subagent-stop-selected"
+            disabled={Boolean(stoppingMap[selectedMember.name])}
+            title={t('subagents.stopTitle')}
+            onClick={() => { void handleStopWorker(selectedMember.name) }}
+            style={{ color: 'var(--ag-error, #cb3d3d)' }}
+          >
+            {stoppingMap[selectedMember.name] ? t('subagents.stopping') : t('subagents.stop')}
+          </button>
+        )}
         <button type="button" className="ag-ghost-btn" onClick={() => void fetchTrace(false)} disabled={loading}>
           {loading ? t('common.refreshing') : t('common.refresh')}
         </button>
@@ -367,24 +396,45 @@ export function SubagentsTab({ snapshot, initialMember, onAction, onJumpToSeq }:
               <div>
                 <div className="ag-sub-sgroup">{t('subagents.working')}</div>
                 {workingWorkers.map((m) => (
-                  <button
+                  <div
                     key={m.name}
-                    type="button"
-                    className={`ag-sub-sitem${selectedName === m.name ? ' on' : ''}`}
-                    onClick={() => setSelectedName(m.name)}
+                    className={`ag-sub-sitem-row${selectedName === m.name ? ' on' : ''}`}
                   >
-                    <span className="ag-sub-dotgrid" aria-hidden="true"><i /><i /><i /><i /></span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        Swarm Worker ({m.name})
-                      </span>
-                      {m.activity && (
-                        <span style={{ display: 'block', fontSize: 11, color: 'var(--ag-fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {m.activity}
+                    <button
+                      type="button"
+                      className={`ag-sub-sitem${selectedName === m.name ? ' on' : ''}`}
+                      onClick={() => setSelectedName(m.name)}
+                    >
+                      <span className="ag-sub-dotgrid" aria-hidden="true"><i /><i /><i /><i /></span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          Swarm Worker ({m.name})
                         </span>
-                      )}
-                    </span>
-                  </button>
+                        {m.activity && (
+                          <span style={{ display: 'block', fontSize: 11, color: 'var(--ag-fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {m.activity}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ag-sub-stop-btn"
+                      data-testid={`swarm-subagent-stop-${m.name}`}
+                      disabled={Boolean(stoppingMap[m.name])}
+                      aria-label={`${t('subagents.stop')} ${m.name}`}
+                      title={t('subagents.stopTitle')}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void handleStopWorker(m.name)
+                      }}
+                    >
+                      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                        <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.25" />
+                        <rect x="5.75" y="5.75" width="4.5" height="4.5" rx="0.9" fill="currentColor" />
+                      </svg>
+                    </button>
+                  </div>
                 ))}
               </div>
             )}

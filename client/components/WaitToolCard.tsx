@@ -126,6 +126,7 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
   const [showFullRaw, setShowFullRaw] = useState(false)
   const [expandedMsgs, setExpandedMsgs] = useState<Record<number, boolean>>({})
   const [stopping, setStopping] = useState(false)
+  const [stoppingMember, setStoppingMember] = useState<Record<string, boolean>>({})
   const { snapshot, postAction } = useSwarmStore()
 
   const status = resolveStatus(props)
@@ -349,6 +350,33 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
                 <span style={{ fontFamily: 'var(--ag-mono, monospace)', fontSize: 11, lineHeight: '20px', color: 'var(--ag-fg-faint, #9da5ab)' }}>
                   {isZh ? `${m.steps_count} 步` : `${m.steps_count}s`}
                 </span>
+              )}
+              {snapshot && (
+                <button
+                  type="button"
+                  className="ag-sub-stop-btn"
+                  data-testid={`swarm-wait-stop-${m.name}`}
+                  disabled={Boolean(stoppingMember[m.name])}
+                  aria-label={isZh ? `停止 ${m.name}` : `Stop ${m.name}`}
+                  title={isZh ? '停止该子代理（可 @唤醒继续）' : 'Stop this subagent (can resume via @mention)'}
+                  onClick={() => {
+                    if (stoppingMember[m.name]) return
+                    setStoppingMember((prev) => ({ ...prev, [m.name]: true }))
+                    void postAction({ action: 'stop_worker', swarmId: snapshot.swarm_id, member: m.name }).finally(() => {
+                      setStoppingMember((prev) => {
+                        const next = { ...prev }
+                        delete next[m.name]
+                        return next
+                      })
+                    })
+                  }}
+                  style={{ width: 20, height: 20, marginRight: 0 }}
+                >
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                    <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.25" />
+                    <rect x="5.75" y="5.75" width="4.5" height="4.5" rx="0.9" fill="currentColor" />
+                  </svg>
+                </button>
               )}
             </div>
           ))}

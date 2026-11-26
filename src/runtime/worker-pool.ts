@@ -269,6 +269,47 @@ export class WorkerPool {
     }
   }
 
+  async cancelWorker(swarmId: string, memberName: string, reason = 'user_stopped'): Promise<boolean> {
+    const swarm = this.store.getSwarm(swarmId)
+    if (!swarm) throw new Error(`Swarm not found: ${swarmId}`)
+    if (memberName === 'coordinator' || memberName === 'monitor') {
+      throw new Error(`Cannot stop "${memberName}"`)
+    }
+    const member = swarm.members[memberName]
+    if (!member) throw new Error(`Member "${memberName}" not found`)
+    if (isKilled(member)) {
+      throw new Error(`Member "${memberName}" has already been killed`)
+    }
+
+    const agents = this.ctx.get<HostAgentsLike>('agents')
+    const subagents = this.ctx.get<HostSubagentsLike>('subagents')
+    const convId = member.conversation_id
+    this.pendingWakeups.delete(convId)
+    const handle = this.liveHandles.get(convId)
+    const live = handle?.agent ?? agents?.get?.(convId)
+    const wasRunning = member.state === 'working' || live?.status === 'running'
+
+    if (live && typeof live.cancel === 'function') {
+      try {
+        await live.cancel({ kind: 'user', reason })
+      } catch { /* best-effort worker cancel */ }
+    } else if (typeof subagents?.interrupt === 'function') {
+      try {
+        await subagents.interrupt(convId, { kind: 'user' })
+      } catch { /* ignore if not managed by subagents */ }
+    }
+
+    if (wasRunning) {
+      this.store.updateMember(swarmId, member.name, {
+        state: 'waiting',
+        activity: '已手动停止（可 @唤醒继续）',
+        activity_kind: 'idle',
+      })
+      return true
+    }
+    return false
+  }
+
   async cancelActiveWorkers(swarmId: string, reason = 'coordinator_stopped'): Promise<string[]> {
     const swarm = this.store.getSwarm(swarmId)
     if (!swarm) return []

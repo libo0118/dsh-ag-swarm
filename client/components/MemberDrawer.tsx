@@ -80,6 +80,7 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
     setConfirmKill(false)
     setActionFeedback(null)
     setNudgeText('')
+    void swarmClientStore.listModels(true).catch(() => {})
     void loadTranscript()
   }, [member?.name, swarmId, loadTranscript])
 
@@ -134,6 +135,14 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
       swarmId,
       member: member.name,
       ...(trimmed ? { text: trimmed } : {}),
+    })
+  }
+
+  const handleStop = (): void => {
+    void runAction(isZh ? '停止子代理' : 'Stop worker', {
+      action: 'stop_worker',
+      swarmId,
+      member: member.name,
     })
   }
 
@@ -409,14 +418,28 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
             {!isCoordinator && !member.killed && (
               <div style={{ paddingTop: 6, borderTop: '1px solid var(--ag-line, rgba(128,128,128,0.14))' }}>
                 {!confirmKill ? (
-                  <button
-                    type="button"
-                    className="ag-btn danger sm"
-                    disabled={busyAction !== null}
-                    onClick={() => setConfirmKill(true)}
-                  >
-                    {t('drawer.kill')}
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    {member.state === 'working' && (
+                      <button
+                        type="button"
+                        className="ag-btn sm"
+                        data-testid="swarm-drawer-stop"
+                        disabled={busyAction !== null}
+                        onClick={handleStop}
+                        style={{ color: 'var(--ag-error, #cb3d3d)' }}
+                      >
+                        {busyAction === (isZh ? '停止子代理' : 'Stop worker') ? t('subagents.stopping') : t('drawer.stop')}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="ag-btn danger sm"
+                      disabled={busyAction !== null}
+                      onClick={() => setConfirmKill(true)}
+                    >
+                      {t('drawer.kill')}
+                    </button>
+                  </div>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 12, color: 'var(--ag-error, #cb3d3d)', fontWeight: 500 }}>

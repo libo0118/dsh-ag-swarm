@@ -140,6 +140,7 @@ function resolveTargetSwarm(store: SwarmStore, swarmId?: string | null, sessionI
 }
 
 function openSseStream(
+  ctx: PluginContextLike,
   req: IncomingMessage,
   res: ServerResponse,
   store: SwarmStore,
@@ -147,6 +148,7 @@ function openSseStream(
 ): void {
   let closed = false
   let heartbeat: ReturnType<typeof setInterval> | undefined
+  let offModels: (() => void) | undefined
 
   const writeFrame = (payload: SseEventPayload) => {
     if (closed || res.destroyed || res.writableEnded) return
@@ -172,6 +174,8 @@ function openSseStream(
     closed = true
     if (heartbeat !== undefined) clearInterval(heartbeat)
     store.off('update', onUpdate)
+    try { offModels?.() } catch { /* ignore */ }
+    offModels = undefined
     req.off('close', cleanup)
     req.off('aborted', cleanup)
     req.off('error', cleanup)
@@ -200,6 +204,9 @@ function openSseStream(
 
   writeFrame({ type: 'connected' })
   store.on('update', onUpdate)
+  try {
+    offModels = ctx.on('llm/adapters-updated', () => writeFrame({ type: 'models_updated' }))
+  } catch { /* ignore if host context rejects event subscription */ }
 
   heartbeat = setInterval(() => {
     writeFrame({ type: 'ping' })
@@ -301,6 +308,13 @@ async function handleUiAction(
       const text = typeof body.text === 'string' && body.text.trim() ? body.text.trim() : undefined
       const res = await pool.nudgeMember(swarmId, member, text)
       return { ok: true, seq: res.message.seq, woken: res.woken }
+    }
+    case 'stop_worker': {
+      const swarmId = String(body.swarmId ?? '').trim()
+      const member = String(body.member ?? '').trim()
+      if (!swarmId || !member) throw new HttpError(400, 'swarmId and member are required')
+      const stopped = await pool.cancelWorker(swarmId, member, 'user_stopped')
+      return { ok: true, member, stopped }
     }
     case 'stop_workers': {
       const swarmId = String(body.swarmId ?? '').trim()
@@ -567,7 +581,7 @@ export function registerSwarmRoutes(
             sendJson(res, 429, { error: 'too many SSE streams' }, { 'retry-after': '15' })
             return
           }
-          openSseStream(req, res, store, streams)
+          openSseStream(ctx, req, res, store, streams)
           return
         }
 

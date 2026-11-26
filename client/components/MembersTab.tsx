@@ -218,6 +218,21 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
               }}
             >
               {modelShort && <span>{modelShort}</span>}
+              {m.role !== 'coordinator' && !m.killed && m.state === 'working' && (
+                <button
+                  type="button"
+                  className="ag-ghost-btn"
+                  data-testid={`swarm-member-stop-${m.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void onAction({ action: 'stop_worker', swarmId: snapshot.swarm_id, member: m.name })
+                  }}
+                  title={t('subagents.stopTitle')}
+                  style={{ height: 20, padding: '0 6px', fontSize: 11, color: 'var(--ag-error, #cb3d3d)' }}
+                >
+                  {t('subagents.stop')}
+                </button>
+              )}
               {onInspectSubagent && (
                 <button
                   type="button"

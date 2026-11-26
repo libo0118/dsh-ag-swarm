@@ -246,6 +246,10 @@ export type UiActionRequest = {
     member: string;
     text?: string;
 } | {
+    action: 'stop_worker';
+    swarmId: string;
+    member: string;
+} | {
     action: 'stop_workers';
     swarmId: string;
 } | {
@@ -266,7 +270,7 @@ export type UiActionRequest = {
     sessionId?: string;
 };
 export interface SseEventPayload {
-    type: 'connected' | 'swarm_update' | 'ping';
+    type: 'connected' | 'swarm_update' | 'models_updated' | 'ping';
     swarmId?: string;
     sessionId?: string;
     etag?: string;

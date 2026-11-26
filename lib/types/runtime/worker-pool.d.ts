@@ -79,6 +79,7 @@ export declare class WorkerPool {
     }>;
     private rebuildSessionIndex;
     private reconcileStaleStateOnStartup;
+    cancelWorker(swarmId: string, memberName: string, reason?: string): Promise<boolean>;
     cancelActiveWorkers(swarmId: string, reason?: string): Promise<string[]>;
     private installHostListeners;
     ensureSwarmForSession(sessionId: string, title?: string, baseWorkspace?: string, agent?: HostAgentLike): SwarmState;

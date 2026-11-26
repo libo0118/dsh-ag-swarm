@@ -1331,4 +1331,88 @@ describe('/swarm primary command, WorkerPool presets & /api/model-presets routes
 
     await pool2.dispose()
   })
+
+  it('v0.1.9: stops an individual working subagent via stop_worker and pushes models_updated SSE / fresh /api/models on llm adapter changes', async () => {
+    const storageDir = makeTempDir('ag-v019-store-')
+    const cwd = makeTempDir('ag-v019-cwd-')
+    const ctx = new MockHostContext(cwd)
+
+    let dynamicModels = [
+      { id: 'model-old', name: 'Old Model', provider: 'custom' },
+    ]
+    ctx.services.set('llm', {
+      listProviders: () => [{ id: 'custom', name: 'Custom' }],
+      listModels: () => dynamicModels,
+      resolveModelInfo: async (_p: string, id: string) => ({
+        provider: 'custom',
+        id,
+        name: id,
+        reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' },
+      }),
+    })
+
+    const store = new SwarmStore(storageDir)
+    const config = resolveSwarmConfig({ storageDir, enableWorktrees: false })
+    const pool = new WorkerPool(ctx, store, config)
+    const disposeRoutes = registerSwarmRoutes(ctx, store, pool, { config })
+
+    const coord = new MockAgent('coord-v019', cwd)
+    ctx.agentsMap.set(coord.id, coord)
+    const swarm = pool.ensureSwarmForSession(coord.id, 'Stop Worker & Model Reload', cwd, coord)
+
+    const [wStop, wKeep] = await Promise.all([
+      pool.addWorkers({ swarmId: swarm.swarm_id, callerName: 'coordinator', callerAgent: coord, name: 'w-stop', brief: 'Task A' }).then((r) => r[0]),
+      pool.addWorkers({ swarmId: swarm.swarm_id, callerName: 'coordinator', callerAgent: coord, name: 'w-keep', brief: 'Task B' }).then((r) => r[0]),
+    ])
+
+    const stopAgent = ctx.agentsMap.get(wStop.conversation_id)!
+    const keepAgent = ctx.agentsMap.get(wKeep.conversation_id)!
+    const stopCancelSpy = vi.fn(async () => { stopAgent.status = 'idle' })
+    const keepCancelSpy = vi.fn(async () => { keepAgent.status = 'idle' })
+    stopAgent.cancel = stopCancelSpy
+    keepAgent.cancel = keepCancelSpy
+    stopAgent.status = 'running'
+    keepAgent.status = 'running'
+
+    // 1) Stop only w-stop via POST /ag-swarm/api/action
+    const stopRes = createMockRes()
+    await ctx.routeHandler!(
+      createMockReq('POST', '/ag-swarm/api/action', { action: 'stop_worker', swarmId: swarm.swarm_id, member: 'w-stop' }),
+      stopRes.res,
+    )
+    expect(stopRes.status).toBe(200)
+    expect(JSON.parse(stopRes.chunks.join(''))).toEqual({ ok: true, member: 'w-stop', stopped: true })
+    expect(stopCancelSpy).toHaveBeenCalledWith({ kind: 'user', reason: 'user_stopped' })
+    expect(keepCancelSpy).not.toHaveBeenCalled()
+
+    const latest = store.getSwarm(swarm.swarm_id)!
+    expect(latest.members['w-stop']!.state).toBe('waiting')
+    expect(latest.members['w-stop']!.activity).toContain('手动停止')
+    expect(latest.members['w-keep']!.state).toBe('working')
+
+    // 2) SSE receives models_updated on llm/adapters-updated and /api/models immediately reflects edited models
+    const sseReq = createMockReq('GET', '/ag-swarm/api/events')
+    const sseRes = createMockRes()
+    await ctx.routeHandler!(sseReq, sseRes.res)
+    expect(sseRes.status).toBe(200)
+
+    dynamicModels = [
+      { id: 'model-new-a', name: 'New Model A', provider: 'custom' },
+      { id: 'model-new-b', name: 'New Model B', provider: 'custom' },
+    ]
+    ctx.emit('llm/adapters-updated')
+    await new Promise((r) => setTimeout(r, 10))
+    const sseBody = sseRes.chunks.join('')
+    expect(sseBody).toContain('"type":"models_updated"')
+
+    const modelsRes = createMockRes()
+    await ctx.routeHandler!(createMockReq('GET', '/ag-swarm/api/models'), modelsRes.res)
+    expect(modelsRes.status).toBe(200)
+    const modelsJson = JSON.parse(modelsRes.chunks.join('')) as { models: Array<{ model: string }> }
+    expect(modelsJson.models.map((m) => m.model)).toEqual(['model-new-a', 'model-new-b'])
+
+    sseRes.res.destroy()
+    disposeRoutes()
+    await pool.dispose()
+  })
 })

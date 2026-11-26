@@ -969,6 +969,26 @@
 }
 .ag-sub-wrap.full .ag-sub-side { max-height: none; }
 .ag-sub-sgroup { font-size: 11px; font-weight: 600; color: var(--ag-fg-muted); padding: 2px 6px; }
+.ag-sub-sitem-row {
+  display: flex; align-items: center; gap: 4px;
+  border-radius: 8px; transition: background-color 0.12s ease;
+}
+.ag-sub-sitem-row:hover { background: var(--ag-hover); }
+.ag-sub-sitem-row.on { background: var(--ag-fill); }
+.ag-sub-sitem-row .ag-sub-sitem { flex: 1; min-width: 0; background: transparent; }
+.ag-sub-sitem-row .ag-sub-sitem:hover { background: transparent; }
+.ag-sub-stop-btn {
+  flex: none; width: 22px; height: 22px; margin-right: 4px;
+  padding: 0; border: 0; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--ag-fg-muted); cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.ag-sub-stop-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ag-error, #cb3d3d) 14%, transparent);
+  color: var(--ag-error, #cb3d3d);
+}
+.ag-sub-stop-btn:disabled { opacity: 0.45; cursor: wait; }
 .ag-sub-sitem {
   width: 100%; display: flex; align-items: flex-start; gap: 8px;
   padding: 7px 8px; border: 0; border-radius: 8px;
