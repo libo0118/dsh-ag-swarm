@@ -131,6 +131,7 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
     ? Object.values(snapshot.members).filter((m) => m.role !== 'coordinator' && m.role !== 'monitor' && !m.killed)
     : []
   const workingWorkers = allWorkers.filter((m) => m.state === 'working')
+  const standbyCount = Math.max(0, allWorkers.length - workingWorkers.length)
   const recentPosts = snapshot
     ? snapshot.messages.filter((m) => m.kind !== 'control').slice(-2)
     : []
@@ -157,7 +158,12 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
         </span>
         {allWorkers.length > 0 && (
           <span style={{ fontSize: 11, color: 'var(--ag-primary, #007acc)', fontWeight: 500 }}>
-            {isZh ? `${workingWorkers.length}/${allWorkers.length} 工作中` : `${workingWorkers.length}/${allWorkers.length} working`}
+            {isZh ? `${workingWorkers.length} 工作中` : `${workingWorkers.length} working`}
+            {standbyCount > 0 && (
+              <span style={{ color: 'var(--ag-fg-muted, #5d676f)', fontWeight: 400 }}>
+                {isZh ? ` · ${standbyCount} 待命` : ` · ${standbyCount} standby`}
+              </span>
+            )}
           </span>
         )}
         <span className="ag-spacer" />
@@ -177,9 +183,9 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
         )}
       </div>
 
-      {allWorkers.length > 0 && (
+      {workingWorkers.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {allWorkers.map((m) => (
+          {workingWorkers.map((m) => (
             <div
               key={m.name}
               style={{
@@ -191,13 +197,14 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
                 background: 'var(--ag-fill, rgba(128,128,128,0.06))',
               }}
             >
-              <PixelBee name={m.name} role={m.role} state={m.state === 'working' ? 'working' : 'landed'} size={1} />
-              <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>@{m.name}</span>
+              <PixelBee name={m.name} role={m.role} state="working" size={1} />
+              <span style={{ fontWeight: 600, lineHeight: '20px', whiteSpace: 'nowrap' }}>@{m.name}</span>
               <span
-                className={m.state === 'working' && m.activity ? 'ag-shimmer' : ''}
+                className={m.activity ? 'ag-shimmer' : ''}
                 style={{
                   flex: 1,
                   minWidth: 0,
+                  lineHeight: '20px',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -205,17 +212,21 @@ export function WaitToolCard(props: WaitToolCardProps): JSX.Element {
                 }}
                 title={m.activity || ''}
               >
-                {m.activity || (m.state === 'working' ? (isZh ? '工作中…' : 'Working…') : t(`members.state.${m.state}` as 'members.state.waiting'))}
+                {m.activity || (isZh ? '工作中…' : 'Working…')}
               </span>
               {typeof m.steps_count === 'number' && m.steps_count > 0 && (
-                <span style={{ fontFamily: 'var(--ag-mono, monospace)', fontSize: 11, color: 'var(--ag-fg-faint, #9da5ab)' }}>
+                <span style={{ fontFamily: 'var(--ag-mono, monospace)', fontSize: 11, lineHeight: '20px', color: 'var(--ag-fg-faint, #9da5ab)' }}>
                   {isZh ? `${m.steps_count} 步` : `${m.steps_count}s`}
                 </span>
               )}
             </div>
           ))}
         </div>
-      )}
+      ) : allWorkers.length > 0 ? (
+        <div style={{ fontSize: 11.5, color: 'var(--ag-fg-muted, #5d676f)', lineHeight: '20px' }}>
+          {isZh ? '等待子代理唤醒…' : 'Waiting for workers to wake…'}
+        </div>
+      ) : null}
 
       {recentPosts.length > 0 && (
         <div style={{ borderTop: '1px solid var(--ag-line, rgba(128,128,128,0.12))', paddingTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
