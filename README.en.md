@@ -72,16 +72,16 @@ Calling `swarm_wait` no longer leaves the main conversation in a black box: the 
 | ![Hive Graph](./docs/images/graph-hive.png) | ![Role Model Presets](./docs/images/role-models.png) |
 ---
 
-## Comparison
+## Capabilities
 
-| Capability | `linkbag/dsh-swarm-orchestrator` | `zhairy/dsh-agent-swarm` | Antigravity Native Swarm | **`dsh-ag-swarm` (This Plugin)** |
-|---|---|---|---|---|
-| Orchestration | Static 4-role DAG | Fixed Leader + 12 presets | Autonomous peers + blackboard | **Autonomous parallel peers + shared blackboard** |
-| Worker Lifecycle | One-shot stateless spawn | `startActivation` / `sendMessage` | `working/waiting/stopped/killed` | **Persistent `ctx.agents` pool + `startActivation` fallback** |
-| Doorbells | Unidirectional report | Lead-coordinated | `@name`, `@all`, `@#channel` | **`@name`, `@prefix`, `@all`, `@#channel` doorbells** |
-| Context & Presets | Fresh spawn, shared `cwd` | Seed/notebook + worktree | `fork` history + worktree | **`fork` history + `agentPresets` & delegated policy inheritance** |
-| Keepalive & Controls | Drops to idle | Leader loop | Swarm panel & inline card | **0-token `swarm_wait` keepalive + `WaitToolCard` + per-worker/global Stop** |
-| Web UI | Single Kanban / DAG | Progress + model controls | Multi-tab + Pixel Bees + Subagents | **6-Tab UI (Overview/Board/Subagents/Members/Graph/Raw) + Drawer + GIF** |
+| Capability | Antigravity Native Swarm | **`dsh-ag-swarm` (This Plugin)** |
+|---|---|---|
+| Orchestration | Autonomous peers + blackboard | **Autonomous parallel peers + shared blackboard** |
+| Worker Lifecycle | `working/waiting/stopped/killed` | **Persistent `ctx.agents` pool + `startActivation` fallback** |
+| Doorbells | `@name`, `@all`, `@#channel` | **`@name`, `@prefix`, `@all`, `@#channel` doorbells** |
+| Context & Presets | `fork` history + worktree | **`fork` history + `agentPresets` & delegated policy inheritance** |
+| Keepalive & Controls | Swarm panel & inline card | **0-token `swarm_wait` keepalive + `WaitToolCard` + per-worker/global Stop** |
+| Web UI | Multi-tab + Pixel Bees + Subagents | **6-Tab UI (Overview/Board/Subagents/Members/Graph/Raw) + Drawer + GIF** |
 
 ---
 

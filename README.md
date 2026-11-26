@@ -72,16 +72,16 @@ flowchart LR
 | ![蜂巢图谱](./docs/images/graph-hive.png) | ![角色模型设置](./docs/images/role-models.png) |
 ---
 
-## 方案对比
+## 能力对照
 
-| 能力维度 | `linkbag/dsh-swarm-orchestrator` | `zhairy/dsh-agent-swarm` | Antigravity 原生 Swarm | **`dsh-ag-swarm`（本插件）** |
-|---|---|---|---|---|
-| 编排模式 | 固定 4 角色 DAG | 固定 Leader + 12 专家预设 | 自主对等协作 + 共享黑板 | **自主并行协作 + 共享频道黑板** |
-| 生命周期 | 一次性无状态派发 | `startActivation` / `sendMessage` | `working/waiting/stopped/killed` | **持久化 `ctx.agents` 池 + `startActivation` 回退** |
-| 通信唤醒 | 单向汇总给 Leader | Leader 统一调度 | `@name`、`@all`、`@#channel` | **`@name`、`@prefix`、`@all`、`@#channel` 门铃唤醒** |
-| 上下文与预设 | 空白新建，共享目录 | Seed/Notebook + worktree | `fork` 历史 + worktree 隔离 | **`fork` 历史 + `agentPresets` 完整工具与权限继承** |
-| 保活与交互 | 派发后主会话变空闲 | 由 Leader 循环维护 | Swarm 面板与内嵌状态 | **`swarm_wait` 零 Token 保活 + `WaitToolCard` + 单点/全局停止** |
-| 可视化面板 | 单看板 / DAG | 任务进度与模型控制 | 多标签页 + 像素蜜蜂 + 子代理视图 | **6 标签页（总览/黑板/子代理/成员/图谱/原始数据）+ 抽屉 + GIF 导出** |
+| 能力维度 | Antigravity 原生 Swarm | **`dsh-ag-swarm`（本插件）** |
+|---|---|---|
+| 编排模式 | 自主对等协作 + 共享黑板 | **自主并行协作 + 共享频道黑板** |
+| 生命周期 | `working/waiting/stopped/killed` | **持久化 `ctx.agents` 池 + `startActivation` 回退** |
+| 通信唤醒 | `@name`、`@all`、`@#channel` | **`@name`、`@prefix`、`@all`、`@#channel` 门铃唤醒** |
+| 上下文与预设 | `fork` 历史 + worktree 隔离 | **`fork` 历史 + `agentPresets` 完整工具与权限继承** |
+| 保活与交互 | Swarm 面板与内嵌状态 | **`swarm_wait` 零 Token 保活 + `WaitToolCard` + 单点/全局停止** |
+| 可视化面板 | 多标签页 + 像素蜜蜂 + 子代理视图 | **6 标签页（总览/黑板/子代理/成员/图谱/原始数据）+ 抽屉 + GIF 导出** |
 
 ---
 
