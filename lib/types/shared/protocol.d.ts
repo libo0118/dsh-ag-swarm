@@ -245,6 +245,9 @@ export type UiActionRequest = {
     member: string;
     text?: string;
 } | {
+    action: 'stop_workers';
+    swarmId: string;
+} | {
     action: 'create_channel';
     swarmId: string;
     channel: string;

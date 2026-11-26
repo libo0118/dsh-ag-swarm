@@ -64,6 +64,15 @@ function parseTimeMs(time?: string): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+function isEffectiveFailure(m?: MemberRecord): boolean {
+  if (!m?.failure) return false
+  const failTs = parseTimeMs(m.failure.at)
+  const postTs = parseTimeMs(m.last_post_time)
+  if (postTs > 0 && failTs > 0 && postTs > failTs) return false
+  if (m.state === 'working' && m.activity_kind !== 'error' && (m.steps_count ?? 0) > 1) return false
+  return true
+}
+
 function isFrameSizeValid(filePath: string): boolean {
   try {
     const stat = fs.statSync(filePath)
@@ -264,9 +273,9 @@ function resolveThreadState(
   for (const t of tasks) {
     const m = members[t.name]
     const active = !isKilled(m)
-    if (active && (m?.failure?.kind === 'error' || m?.failure?.kind === 'quota')) {
+    if (active && isEffectiveFailure(m) && (m!.failure!.kind === 'error' || m!.failure!.kind === 'quota')) {
       hasNeeds = true
-      needsDetail ||= `@${t.name}: ${m.failure.message}`
+      needsDetail ||= `@${t.name}: ${m!.failure!.message}`
     } else if (active && t.state === 'waiting' && t.waiting_on && t.waiting_on.length > 0 && !t.done) {
       hasWaiting = true
       waitingDetail ||= `@${t.name} waiting on ${t.waiting_on.map((w) => `@${w}`).join(', ')}`
@@ -300,7 +309,7 @@ function computeThreads(state: SwarmState, doneSet: Set<string>, stuckSet: Set<s
       done: isDone,
       activity: m?.activity,
       waiting_on: m?.waiting_on,
-      failure: m?.failure?.message,
+      failure: isEffectiveFailure(m) ? m?.failure?.message : undefined,
     }
   }
 
@@ -351,7 +360,7 @@ function computeSystemAttention(state: SwarmState, stuckSet: Set<string>): Atten
   const items: AttentionItem[] = []
   for (const m of Object.values(state.members)) {
     if (isKilled(m) || isRoleOnlyMember(m.name, m)) continue
-    if (m.failure) {
+    if (isEffectiveFailure(m) && m.failure) {
       items.push({
         id: `failure:${m.name}`,
         kind: m.failure.kind,
@@ -477,7 +486,7 @@ export function buildSnapshot(state: SwarmState, options: BuildSnapshotOptions =
   const doneTasks = threads.reduce((sum, t) => sum + t.progress.done, 0)
   const workingCount = activeMembers.filter((m) => m.state === 'working').length
   const waitingCount = activeMembers.filter((m) => m.state === 'waiting').length
-  const errorCount = activeMembers.filter((m) => m.failure?.kind === 'error' || m.failure?.kind === 'quota').length
+  const errorCount = activeMembers.filter((m) => isEffectiveFailure(m) && (m.failure?.kind === 'error' || m.failure?.kind === 'quota')).length
 
   return {
     swarm_id: state.swarm_id,

@@ -225,6 +225,7 @@ export type UiActionRequest =
   | { action: 'switch_model'; swarmId: string; member: string; model: string; provider?: string; reasoningEffort?: string }
   | { action: 'kill_worker'; swarmId: string; member: string }
   | { action: 'nudge_worker'; swarmId: string; member: string; text?: string }
+  | { action: 'stop_workers'; swarmId: string }
   | { action: 'create_channel'; swarmId: string; channel: string; topic?: string }
   | { action: 'archive_channel'; swarmId: string; channel: string }
   | { action: 'update_plan'; swarmId: string; plan: PlanFile }

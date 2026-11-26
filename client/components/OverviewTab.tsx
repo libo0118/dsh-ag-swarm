@@ -476,6 +476,8 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
     const done: Array<{ id: string; label: string; owner: string }> = []
     const queued: Array<{ id: string; label: string; owner: string }> = []
     const seen = new Set<string>()
+    let waitingCount = 0
+    let errorsCount = 0
     for (const t of filteredThreads) {
       for (const task of t.tasks) {
         const key = `${t.id}:${task.name}:${task.label}`
@@ -485,14 +487,18 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
           done.push({ id: key, label: task.label, owner: task.name })
         } else if (task.state === 'working' || (task.waiting_on && task.waiting_on.length > 0) || task.failure) {
           const m = snapshot.members[task.name]
+          const hasFailure = Boolean(task.failure)
+          const isWaitingOn = !hasFailure && Boolean(task.waiting_on?.length)
+          if (hasFailure) errorsCount++
+          else if (isWaitingOn) waitingCount++
           running.push({
             id: key,
             label: task.label,
             owner: task.name,
-            blocked: Boolean(task.waiting_on?.length || task.failure),
+            blocked: hasFailure || isWaitingOn,
             waitingOn: task.waiting_on,
             activity: task.activity ?? m?.activity,
-            failure: task.failure ?? m?.failure?.message,
+            failure: task.failure ?? (hasFailure ? m?.failure?.message : undefined),
           })
         } else {
           queued.push({ id: key, label: task.label, owner: task.name })
@@ -503,11 +509,15 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
       for (const m of crew) {
         if (activeFilter && m.name !== activeFilter) continue
         if (m.state === 'working' || m.waiting_on?.length || m.failure) {
+          const hasFailure = Boolean(m.failure)
+          const isWaitingOn = !hasFailure && Boolean(m.waiting_on?.length)
+          if (hasFailure) errorsCount++
+          else if (isWaitingOn) waitingCount++
           running.push({
             id: m.name,
             label: m.task_hint || `@${m.name}`,
             owner: m.name,
-            blocked: Boolean(m.waiting_on?.length || m.failure),
+            blocked: hasFailure || isWaitingOn,
             waitingOn: m.waiting_on,
             activity: m.activity,
             failure: m.failure?.message,
@@ -519,7 +529,9 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
     const tot = {
       done: done.length,
       running: running.filter((r) => !r.blocked).length,
-      blocked: running.filter((r) => r.blocked).length,
+      waiting: waitingCount,
+      errors: errorsCount,
+      blocked: waitingCount + errorsCount,
       queued: queued.length,
     }
     return { running, done, queued, tot }
@@ -766,17 +778,21 @@ export function OverviewTab({ snapshot, onJumpToSeq, onSwitchTab }: OverviewTabP
             <b>{t('overview.tasksDone', { done: taskSummary.tot.done, total: totalTasks || snapshot.stats.totalTasks })}</b>
           </span>
           <span className="ag-o2-progr">
-            {taskSummary.tot.blocked > 0 && (
-              <span className="ag-o2-pchip warn"><i aria-hidden="true" />{t('overview.waitingCount', { count: taskSummary.tot.blocked })}</span>
+            {taskSummary.tot.running > 0 && (
+              <span className="ag-o2-pchip info"><i aria-hidden="true" />{t('header.working', { count: taskSummary.tot.running })}</span>
+            )}
+            {taskSummary.tot.waiting > 0 && (
+              <span className="ag-o2-pchip warn"><i aria-hidden="true" />{t('overview.waitingCount', { count: taskSummary.tot.waiting })}</span>
+            )}
+            {taskSummary.tot.errors > 0 && (
+              <span className="ag-o2-pchip bad"><i aria-hidden="true" />{zh ? `${taskSummary.tot.errors} 异常` : `${taskSummary.tot.errors} error`}</span>
             )}
             {snapshot.stats.stuckCount > 0 && (
               <span className="ag-o2-pchip bad"><i aria-hidden="true" />{t('overview.stuckCount', { count: snapshot.stats.stuckCount })}</span>
             )}
-            {openThreadsCount > 0 ? (
+            {openThreadsCount > 0 && (
               <span className="ag-o2-pchip">{t('overview.threadsOpen', { count: openThreadsCount })}</span>
-            ) : taskSummary.tot.running > 0 ? (
-              <span className="ag-o2-pchip info"><i aria-hidden="true" />{t('header.working', { count: taskSummary.tot.running })}</span>
-            ) : null}
+            )}
             <span className="ag-o2-chev" aria-hidden="true" />
           </span>
         </button>

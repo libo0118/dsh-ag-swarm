@@ -376,6 +376,7 @@ export function registerSwarmTools(
         required: ['since'],
       },
       isConcurrencySafe: () => true,
+      timeoutMs: 3_660_000,
       execute: async (args, exec) => {
         const caller = pool.resolveCaller(exec.agent)
         const since = typeof args.since === 'number' && Number.isFinite(args.since) ? Math.trunc(args.since) : 0

@@ -302,6 +302,12 @@ async function handleUiAction(
       const res = await pool.nudgeMember(swarmId, member, text)
       return { ok: true, seq: res.message.seq, woken: res.woken }
     }
+    case 'stop_workers': {
+      const swarmId = String(body.swarmId ?? '').trim()
+      if (!swarmId) throw new HttpError(400, 'swarmId is required')
+      const stopped = await pool.cancelActiveWorkers(swarmId, 'user_requested')
+      return { ok: true, stopped }
+    }
     case 'create_channel': {
       const swarmId = String(body.swarmId ?? '').trim()
       const channel = String(body.channel ?? '').trim()

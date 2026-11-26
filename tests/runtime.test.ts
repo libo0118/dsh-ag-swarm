@@ -62,6 +62,8 @@ class MockAgent implements HostAgentLike {
     this.status = 'running'
   }
 
+  cancel?: (reason?: unknown, options?: Record<string, unknown>) => Promise<void> | void
+
   async dispose(): Promise<void> {
     this.disposed = true
   }
@@ -1080,6 +1082,108 @@ describe('/swarm primary command, WorkerPool presets & /api/model-presets routes
 
     disposeRoutes()
     toolsHandle.dispose()
+    await pool.dispose()
+  })
+
+  it('v0.1.3: reconciles stale working/failure state on startup, cascades coordinator stop to active workers, and formats object abort reasons cleanly', async () => {
+    const storageDir = makeTempDir('ag-v013-store-')
+    const cwd = makeTempDir('ag-v013-cwd-')
+
+    // 1) Startup reconciliation: stale working & old Step #1 failure from previous DSH process
+    const store1 = new SwarmStore(storageDir)
+    const preSwarm = store1.createOrGetSwarm('coord-v013-restart', 'Restart Test', cwd)
+    store1.updateMember(preSwarm.swarm_id, 'coordinator', { state: 'working', activity: 'Step #22' })
+    const oldFailAt = new Date(Date.now() - 60_000).toISOString()
+    store1.addMember(preSwarm.swarm_id, {
+      name: 'worker-stale',
+      conversation_id: 'agw-stale-1',
+      role: 'worker',
+      state: 'working',
+      workspace_mode: 'inherit',
+      workspace: cwd,
+    })
+    store1.updateMember(preSwarm.swarm_id, 'worker-stale', {
+      steps_count: 25,
+      activity: 'Step #25',
+      activity_kind: 'thinking',
+      failure: { kind: 'error', message: 'unsupported reasoning effort "xhigh"', at: oldFailAt },
+    })
+
+    // Re-open SwarmStore + WorkerPool simulating DSH restart with empty ctx.agents
+    const store2 = new SwarmStore(storageDir)
+    const ctxRestart = new MockHostContext(cwd)
+    const config = resolveSwarmConfig({ storageDir, enableWorktrees: false })
+    const poolRestart = new WorkerPool(ctxRestart, store2, config)
+
+    const reconciledSwarm = store2.getSwarm(preSwarm.swarm_id)!
+    expect(reconciledSwarm.members.coordinator!.state).toBe('waiting')
+    expect(reconciledSwarm.members['worker-stale']!.state).toBe('stopped')
+    expect(reconciledSwarm.members['worker-stale']!.failure).toBeUndefined()
+    await poolRestart.dispose()
+
+    // 2) Cascade-stop workers when coordinator swarm_wait aborts with { kind: 'user' } object reason
+    const ctx = new MockHostContext(cwd)
+    const coord = new MockAgent('coord-stop-1', cwd)
+    coord.status = 'running'
+    ctx.agentsMap.set(coord.id, coord)
+    const store = new SwarmStore(makeTempDir('ag-v013-stop-store-'))
+    const pool = new WorkerPool(ctx, store, resolveSwarmConfig({ storageDir: makeTempDir('ag-v013-cfg-'), enableWorktrees: false }))
+    const disposeRoutes = registerSwarmRoutes(ctx, store, pool, { config })
+
+    const swarm = pool.ensureSwarmForSession(coord.id, 'Cascade Stop', cwd, coord)
+    const [w1] = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      callerAgent: coord,
+      name: 'runner-1',
+      brief: 'Long task',
+    })
+    const workerAgent = ctx.agentsMap.get(w1.conversation_id)!
+    const cancelSpy = vi.fn(async () => { workerAgent.status = 'idle' })
+    workerAgent.cancel = cancelSpy
+    workerAgent.status = 'running'
+
+    // Stale failure cleared when worker posts a message or emits running status
+    store.updateMember(swarm.swarm_id, 'runner-1', {
+      failure: { kind: 'error', message: 'transient', at: new Date().toISOString() },
+    })
+    store.appendMessage(swarm.swarm_id, { agent: 'runner-1', text: 'Working progress update' })
+    expect(store.getSwarm(swarm.swarm_id)!.members['runner-1']!.failure).toBeUndefined()
+
+    const ac = new AbortController()
+    const waitPromise = pool.waitForBoard({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      since: store.getSwarm(swarm.swarm_id)!.head,
+      timeout_ms: 60_000,
+      agent: coord,
+      signal: ac.signal,
+    })
+
+    await new Promise((r) => setTimeout(r, 15))
+    ac.abort({ kind: 'user' })
+    await expect(waitPromise).rejects.toThrow('Cancelled by user')
+    await new Promise((r) => setTimeout(r, 15))
+    expect(cancelSpy).toHaveBeenCalledWith({ kind: 'user', reason: 'coordinator_aborted' })
+    expect(store.getSwarm(swarm.swarm_id)!.members['runner-1']!.state).toBe('waiting')
+
+    // 3) workspace/session-stop & HTTP POST stop_workers stop working workers cleanly
+    store.updateMember(swarm.swarm_id, 'runner-1', { state: 'working' })
+    workerAgent.status = 'running'
+    ctx.emit('workspace/session-stop', { sessionId: coord.id })
+    await new Promise((r) => setTimeout(r, 15))
+    expect(cancelSpy).toHaveBeenCalledTimes(2)
+    expect(store.getSwarm(swarm.swarm_id)!.members['runner-1']!.state).toBe('waiting')
+
+    store.updateMember(swarm.swarm_id, 'runner-1', { state: 'working' })
+    workerAgent.status = 'running'
+    const stopRes = createMockRes()
+    await ctx.routeHandler!(createMockReq('POST', '/ag-swarm/api/action', { action: 'stop_workers', swarmId: swarm.swarm_id }), stopRes.res)
+    expect(stopRes.status).toBe(200)
+    expect(JSON.parse(stopRes.chunks.join('')).stopped).toEqual(['runner-1'])
+    expect(store.getSwarm(swarm.swarm_id)!.members['runner-1']!.state).toBe('waiting')
+
+    disposeRoutes()
     await pool.dispose()
   })
 })

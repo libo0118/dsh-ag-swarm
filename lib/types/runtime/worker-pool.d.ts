@@ -71,6 +71,8 @@ export declare class WorkerPool {
         role_presets: RoleModelMap;
     }>;
     private rebuildSessionIndex;
+    private reconcileStaleStateOnStartup;
+    cancelActiveWorkers(swarmId: string, reason?: string): Promise<string[]>;
     private installHostListeners;
     ensureSwarmForSession(sessionId: string, title?: string, baseWorkspace?: string, agent?: HostAgentLike): SwarmState;
     private syncCoordinatorFromAgent;

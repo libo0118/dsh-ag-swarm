@@ -120,6 +120,22 @@ function clampWaitMs(raw: unknown): number {
   return n
 }
 
+function formatAbortError(reason: unknown, fallback: string): Error {
+  if (reason instanceof Error) return reason
+  if (typeof reason === 'string' && reason.trim()) return new Error(reason)
+  if (reason && typeof reason === 'object') {
+    const rec = reason as { message?: unknown; kind?: unknown; reason?: unknown }
+    if (typeof rec.message === 'string' && rec.message.trim()) return new Error(rec.message)
+    if (rec.kind === 'user') return new Error('Cancelled by user')
+    if (typeof rec.reason === 'string' && rec.reason.trim()) return new Error(rec.reason)
+    try {
+      const json = JSON.stringify(reason)
+      if (json && json !== '{}') return new Error(`${fallback}: ${json}`)
+    } catch { /* ignore */ }
+  }
+  return new Error(fallback)
+}
+
 function classifyFailureKind(err: unknown): { kind: 'quota' | 'error'; message: string } {
   const msg = err instanceof Error
     ? err.message
@@ -170,6 +186,7 @@ export class WorkerPool {
   ) {
     this.modelPresets = new ModelPresetStore(config.storageDir)
     this.rebuildSessionIndex()
+    this.reconcileStaleStateOnStartup()
     this.installHostListeners()
   }
 
@@ -201,6 +218,81 @@ export class WorkerPool {
     }
   }
 
+  private reconcileStaleStateOnStartup(): void {
+    const agents = this.ctx.get<HostAgentsLike>('agents')
+    for (const summary of this.store.listSwarms()) {
+      const state = this.store.getSwarm(summary.swarm_id)
+      if (!state) continue
+      for (const member of Object.values(state.members)) {
+        if (isKilled(member)) continue
+        const patch: Partial<MemberRecord> = {}
+        if (member.failure) {
+          const failTs = Date.parse(member.failure.at)
+          const postTs = member.last_post_time ? Date.parse(member.last_post_time) : 0
+          const hasPostedAfter = Number.isFinite(postTs) && Number.isFinite(failTs) && postTs > failTs
+          const advancedBeyondFirstStep = member.activity_kind !== 'error' && (member.steps_count ?? 0) > 1
+          if (hasPostedAfter || advancedBeyondFirstStep) {
+            patch.failure = undefined
+          }
+        }
+        if (member.state === 'working') {
+          const live = typeof agents?.get === 'function' ? agents.get(member.conversation_id) : undefined
+          if (!live || live.status !== 'running') {
+            if (member.role === 'coordinator') {
+              patch.state = 'waiting'
+              patch.activity = undefined
+              patch.activity_kind = 'idle'
+            } else {
+              patch.state = 'stopped'
+              patch.activity = '已随重启休眠（可 @唤醒继续）'
+              patch.activity_kind = 'idle'
+            }
+          }
+        }
+        if (Object.keys(patch).length > 0) {
+          this.store.updateMember(state.swarm_id, member.name, patch)
+        }
+      }
+    }
+  }
+
+  async cancelActiveWorkers(swarmId: string, reason = 'coordinator_stopped'): Promise<string[]> {
+    const swarm = this.store.getSwarm(swarmId)
+    if (!swarm) return []
+    const agents = this.ctx.get<HostAgentsLike>('agents')
+    const subagents = this.ctx.get<HostSubagentsLike>('subagents')
+    const stopped: string[] = []
+
+    for (const member of Object.values(swarm.members)) {
+      if (isKilled(member) || member.role === 'coordinator' || member.role === 'monitor') continue
+      const convId = member.conversation_id
+      this.pendingWakeups.delete(convId)
+      const handle = this.liveHandles.get(convId)
+      const live = handle?.agent ?? agents?.get?.(convId)
+      const wasRunning = member.state === 'working' || live?.status === 'running'
+
+      if (live && typeof live.cancel === 'function') {
+        try {
+          await live.cancel({ kind: 'user', reason })
+        } catch { /* best-effort worker cancel */ }
+      } else if (typeof subagents?.interrupt === 'function') {
+        try {
+          await subagents.interrupt(convId, { kind: 'user' })
+        } catch { /* ignore if not managed by subagents */ }
+      }
+
+      if (wasRunning) {
+        this.store.updateMember(swarmId, member.name, {
+          state: 'waiting',
+          activity: '已随主对话停止而暂停（可 @唤醒继续）',
+          activity_kind: 'idle',
+        })
+        stopped.push(member.name)
+      }
+    }
+    return stopped
+  }
+
   private installHostListeners(): void {
     const safeOn = (event: string, listener: (...args: any[]) => any, options?: Record<string, unknown>) => {
       try {
@@ -211,7 +303,12 @@ export class WorkerPool {
       }
     }
 
-    safeOn('agent/status', (payload: { agent?: HostAgentLike; status?: string }) => {
+    safeOn('agent/status', (payload: {
+      agent?: HostAgentLike
+      status?: string
+      stopReason?: string
+      reason?: { kind?: string }
+    }) => {
       const id = payload?.agent?.id
       if (!id) return
       const ref = this.sessionIndex.get(id)
@@ -225,6 +322,7 @@ export class WorkerPool {
           state: 'working',
           activity: member.activity || 'Working',
           activity_kind: member.activity_kind === 'error' ? 'thinking' : (member.activity_kind ?? 'thinking'),
+          ...(member.failure ? { failure: undefined } : {}),
         })
       } else if (payload.status === 'idle') {
         if (member.state === 'working') {
@@ -234,7 +332,35 @@ export class WorkerPool {
             activity_kind: 'idle',
           })
         }
+        if (ref.memberName === 'coordinator') {
+          let cancelled =
+            payload.stopReason === 'cancelled' ||
+            payload.stopReason === 'aborted' ||
+            payload.reason?.kind === 'user'
+          if (!cancelled) {
+            try {
+              const snapFn = (payload.agent?.session as { snapshotEvents?: (from?: number) => unknown[] } | undefined)?.snapshotEvents
+              const events = typeof snapFn === 'function' ? snapFn() : undefined
+              if (Array.isArray(events)) {
+                const tail = events.slice(-3) as Array<{ type?: string; data?: { stopReason?: string; cancelled?: boolean } }>
+                cancelled = tail.some((e) => e?.data?.stopReason === 'cancelled' || e?.data?.stopReason === 'aborted' || e?.data?.cancelled === true)
+              }
+            } catch { /* ignore */ }
+          }
+          if (cancelled) {
+            void this.cancelActiveWorkers(ref.swarmId, 'coordinator_cancelled')
+          }
+        }
         void this.flushPendingWakeups(ref.swarmId, ref.memberName)
+      }
+    })
+
+    safeOn('workspace/session-stop', (payload: { sessionId?: string }) => {
+      const sid = payload?.sessionId
+      if (!sid) return
+      const ref = this.sessionIndex.get(sid)
+      if (ref && ref.memberName === 'coordinator') {
+        void this.cancelActiveWorkers(ref.swarmId, 'session_stop')
       }
     })
 
@@ -344,13 +470,16 @@ export class WorkerPool {
       const ref = this.sessionIndex.get(id)
       if (!ref) return
       const member = this.store.getSwarm(ref.swarmId)?.members[ref.memberName]
-      if (member && !isKilled(member) && member.role !== 'coordinator') {
-        this.store.updateMember(ref.swarmId, ref.memberName, {
-          state: 'stopped',
-          activity: 'Stopped (can revive on @mention)',
-          activity_kind: 'idle',
-        })
+      if (!member || isKilled(member)) return
+      if (member.role === 'coordinator') {
+        void this.cancelActiveWorkers(ref.swarmId, 'coordinator_disposed')
+        return
       }
+      this.store.updateMember(ref.swarmId, ref.memberName, {
+        state: 'stopped',
+        activity: 'Stopped (can revive on @mention)',
+        activity_kind: 'idle',
+      })
     })
   }
 
@@ -877,6 +1006,7 @@ export class WorkerPool {
           state: 'working',
           activity: `Woken by #${items[items.length - 1]!.seq}`,
           activity_kind: 'wakeup',
+          ...(member.failure ? { failure: undefined } : {}),
         })
       }
       if (typeof live.steer === 'function') {
@@ -964,10 +1094,11 @@ export class WorkerPool {
     // Coordinator role: block inside execute() so DSH keeps main session status === 'running'
     // in the sidebar at zero LLM token cost until a reply, all-idle, user steer, abort, or timeout.
     if (input.signal?.aborted) {
-      throw input.signal.reason ?? new Error('swarm_wait aborted')
+      void this.cancelActiveWorkers(input.swarmId, 'coordinator_aborted')
+      throw formatAbortError(input.signal.reason, 'swarm_wait aborted')
     }
     if (this.lifetime.signal.aborted) {
-      throw this.lifetime.signal.reason ?? new Error('dsh-ag-swarm plugin unloaded')
+      throw formatAbortError(this.lifetime.signal.reason, 'dsh-ag-swarm plugin unloaded')
     }
 
     const timeoutMs = clampWaitMs(input.timeout_ms)
@@ -1044,10 +1175,11 @@ export class WorkerPool {
         if (ev?.swarmId === input.swarmId) checkNow()
       }
       const onAbort = (): void => {
-        finish(() => reject(input.signal?.reason ?? new Error('swarm_wait aborted')))
+        finish(() => reject(formatAbortError(input.signal?.reason, 'swarm_wait aborted')))
+        void this.cancelActiveWorkers(input.swarmId, 'coordinator_aborted')
       }
       const onUnload = (): void => {
-        finish(() => reject(this.lifetime.signal.reason ?? new Error('swarm_wait aborted on plugin unload')))
+        finish(() => reject(formatAbortError(this.lifetime.signal.reason, 'swarm_wait aborted on plugin unload')))
       }
 
       this.store.on('update', onStoreUpdate)

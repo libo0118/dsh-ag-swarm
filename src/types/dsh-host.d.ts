@@ -24,7 +24,7 @@ export interface HostAgentLike {
   steer?: (message: unknown) => Promise<void> | void
   followup?: (message: unknown) => Promise<void> | void
   inject?: (message: unknown) => Promise<void> | void
-  cancel?: (reason: unknown, options?: Record<string, unknown>) => Promise<void> | void
+  cancel?: (reason?: unknown, options?: Record<string, unknown>) => Promise<void> | void
   whenIdle?: () => Promise<void>
   dispose?: () => Promise<void> | void
 }

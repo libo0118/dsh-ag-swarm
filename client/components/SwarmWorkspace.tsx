@@ -103,6 +103,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
       else if (req.action === 'switch_model') showToast(zh ? `已切换 @${req.member} 模型` : `Switched @${req.member} model`)
       else if (req.action === 'kill_worker') showToast(zh ? `已终止 @${req.member}` : `Killed @${req.member}`)
       else if (req.action === 'nudge_worker') showToast(zh ? `已唤醒 @${req.member}` : `Nudged @${req.member}`)
+      else if (req.action === 'stop_workers') showToast(zh ? '已暂停全部运行中的子代理' : 'Stopped all working subagents')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setActionError(msg)
@@ -124,12 +125,13 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
   }, [snapshot, loadingEarlier, fetchMessagesBefore])
 
   const counts = useMemo(() => {
-    if (!snapshot) return { members: 0, workers: 0, attention: 0 }
+    if (!snapshot) return { members: 0, workers: 0, workingWorkers: 0, attention: 0 }
     const all = Object.values(snapshot.members)
     const liveMembers = all.filter((m) => !m.killed).length
     const workers = all.filter((m) => m.role !== 'coordinator' && m.role !== 'monitor' && !m.killed).length
+    const workingWorkers = all.filter((m) => m.role !== 'coordinator' && m.role !== 'monitor' && !m.killed && m.state === 'working').length
     const attention = snapshot.systemAttention.length + (snapshot.stallBanner ? 1 : 0)
-    return { members: liveMembers, workers, attention }
+    return { members: liveMembers, workers, workingWorkers, attention }
   }, [snapshot])
 
   const liveClass = sync === 'live' ? '' : error ? 'error' : 'stale'
@@ -186,6 +188,21 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
           >
             {zh ? '角色模型' : 'Role Models'}
           </button>
+
+          {snapshot && counts.workingWorkers > 0 && (
+            <button
+              type="button"
+              className="ag-ghost-btn"
+              data-testid="swarm-stop-all-workers"
+              title={zh ? '立即停止全部运行中的子代理' : 'Stop all working subagents'}
+              onClick={() => {
+                void handleAction({ action: 'stop_workers', swarmId: snapshot.swarm_id })
+              }}
+              style={{ color: 'var(--ag-error, #cb3d3d)' }}
+            >
+              {zh ? '停止全部' : 'Stop all'}
+            </button>
+          )}
 
           <button
             type="button"
