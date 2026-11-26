@@ -15,6 +15,8 @@ export interface BoardTabProps {
   onAction: (req: UiActionRequest) => Promise<void>
   onLoadEarlier: () => Promise<void>
   loadingEarlier: boolean
+  onOpenMembers?: () => void
+  onSelectSubagent?: (memberName: string) => void
 }
 
 const clockFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
@@ -356,6 +358,8 @@ export function BoardTab({
   onAction,
   onLoadEarlier,
   loadingEarlier,
+  onOpenMembers,
+  onSelectSubagent,
 }: BoardTabProps): JSX.Element {
   const locale = useUiLocale()
   const zh = locale === 'zh-CN'
@@ -696,6 +700,66 @@ export function BoardTab({
           </div>
         )}
       </div>
+
+      {(() => {
+        const workingMembers = roster.filter((m) => !m.killed && m.state === 'working')
+        if (workingMembers.length === 0) return null
+        return (
+          <div
+            data-testid="swarm-board-live-strip"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 6,
+              padding: '6px 10px',
+              marginBottom: 8,
+              borderRadius: 8,
+              background: 'var(--ag-fill, rgba(128,128,128,0.06))',
+              border: '1px solid var(--ag-line, rgba(128,128,128,0.14))',
+              fontSize: 12,
+            }}
+          >
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontWeight: 600,
+                color: 'var(--ag-success, #63984f)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: 'var(--ag-success, #63984f)',
+                }}
+              />
+              {zh ? `${workingMembers.length} 工作中` : `${workingMembers.length} working`}
+            </span>
+            {workingMembers.map((m) => (
+              <button
+                key={m.name}
+                type="button"
+                className="ag-chip"
+                onClick={() => (onSelectSubagent ? onSelectSubagent(m.name) : onOpenMembers?.())}
+                title={m.activity || (zh ? '点击查看成员详情' : 'Open Members tab')}
+                style={{ height: 22, padding: '0 8px', fontSize: 11, maxWidth: 260 }}
+              >
+                <span style={{ fontWeight: 600 }}>@{m.name}</span>
+                {m.activity && (
+                  <span style={{ color: 'var(--ag-fg-muted, #5d676f)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    · {m.activity}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )
+      })()}
 
       <div className="ag-feed">
         {snapshot.messagesOffset > 0 && (

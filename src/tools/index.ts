@@ -17,7 +17,7 @@ interface RawToolSpec {
   name: string
   description: string
   parameters: Record<string, unknown>
-  isConcurrencySafe: () => boolean
+  isConcurrencySafe: (args?: Record<string, unknown>) => boolean
   timeoutMs?: number
   execute: (args: Record<string, unknown>, exec: { agent?: HostAgentLike; signal?: AbortSignal }) => Promise<string>
 }
@@ -152,7 +152,10 @@ export function registerSwarmTools(
         },
         required: ['action'],
       },
-      isConcurrencySafe: () => false,
+      isConcurrencySafe: (args?: Record<string, unknown>) => {
+        const action = typeof args?.action === 'string' ? args.action : ''
+        return action === 'status' || action === 'models' || action === 'add'
+      },
       execute: async (args, exec) => {
         const caller = pool.resolveCaller(exec.agent)
         const action = String(args.action || '')
@@ -170,7 +173,7 @@ export function registerSwarmTools(
             return JSON.stringify(pool.getRosterStatus(caller.swarm.swarm_id))
           }
           case 'models': {
-            return JSON.stringify(pool.getModelCatalogWithPresets())
+            return JSON.stringify(await pool.getModelCatalogWithPresets())
           }
           case 'add': {
             const name = String(args.name ?? '').trim()

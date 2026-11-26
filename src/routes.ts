@@ -196,6 +196,7 @@ function openSseStream(
     'x-content-type-options': 'nosniff',
     connection: 'keep-alive',
   })
+  ;(res as ServerResponse & { flushHeaders?: () => void }).flushHeaders?.()
 
   writeFrame({ type: 'connected' })
   store.on('update', onUpdate)
@@ -455,6 +456,16 @@ export function registerSwarmRoutes(
             return
           }
           sendJson(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
+          return
+        }
+
+        if (pathname === `${AG_SWARM_ROUTE_PREFIX}/api/models`) {
+          if (method !== 'GET') {
+            sendJson(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
+            return
+          }
+          const catalog = await pool.getModelCatalogWithPresets()
+          sendJson(res, 200, { ok: true, ...catalog })
           return
         }
 

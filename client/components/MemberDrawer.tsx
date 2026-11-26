@@ -347,9 +347,13 @@ export function MemberDrawer(props: MemberDrawerProps): JSX.Element | null {
                       fontSize: 12,
                     }}
                   >
-                    <option value="">{t('settings.effortDefault')}</option>
+                    <option value="">
+                      {selectedOpt?.defaultEffort
+                        ? `${t('settings.effortDefault')} (${selectedOpt.defaultEffort})`
+                        : t('settings.effortDefault')}
+                    </option>
                     {efforts.map((ef) => (
-                      <option key={ef} value={ef}>{ef}</option>
+                      <option key={ef.id} value={ef.id}>{ef.name}</option>
                     ))}
                   </select>
                 )}

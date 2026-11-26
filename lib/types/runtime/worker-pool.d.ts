@@ -1,4 +1,4 @@
-import type { BoardMessage, MemberRecord, MemberTranscriptPayload, RoleModelMap, SwarmConfig, WorkspaceMode } from '../shared/protocol.js';
+import type { BoardMessage, CatalogEffortOption, MemberRecord, MemberTranscriptPayload, RoleModelMap, SwarmConfig, WorkspaceMode } from '../shared/protocol.js';
 import type { SwarmState, SwarmStore } from '../core/store.js';
 import type { HostAgentLike, PluginContextLike } from '../types/dsh-host.js';
 export interface AddWorkersInput {
@@ -48,7 +48,9 @@ export interface CatalogModelInfo {
     provider: string;
     model: string;
     label: string;
-    efforts?: string[];
+    efforts?: CatalogEffortOption[];
+    defaultEffort?: string;
+    reasoningKnown?: boolean;
 }
 export declare class WorkerPool {
     private readonly ctx;
@@ -64,10 +66,10 @@ export declare class WorkerPool {
     constructor(ctx: PluginContextLike, store: SwarmStore, config: SwarmConfig);
     getModelPresets(): RoleModelMap;
     setModelPresets(next: unknown): RoleModelMap;
-    getModelCatalogWithPresets(): {
+    getModelCatalogWithPresets(): Promise<{
         models: CatalogModelInfo[];
         role_presets: RoleModelMap;
-    };
+    }>;
     private rebuildSessionIndex;
     private installHostListeners;
     ensureSwarmForSession(sessionId: string, title?: string, baseWorkspace?: string, agent?: HostAgentLike): SwarmState;
@@ -145,7 +147,8 @@ export declare class WorkerPool {
         channel: import("../shared/protocol.js").ChannelMeta;
         message: BoardMessage;
     };
-    listModels(): CatalogModelInfo[];
+    private sanitizeReasoningEffort;
+    listModels(): Promise<CatalogModelInfo[]>;
     getMemberTranscript(swarmId: string, memberName: string): Promise<MemberTranscriptPayload>;
     kickoffCoordinator(agent: HostAgentLike | undefined, swarmId: string, goal: string, attachments?: readonly unknown[]): Promise<{
         dispatched: boolean;

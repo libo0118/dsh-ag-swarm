@@ -974,4 +974,112 @@ describe('/swarm primary command, WorkerPool presets & /api/model-presets routes
     toolsHandle.dispose()
     await pool.dispose()
   })
+
+  it('v0.1.2: reads provider models & reasoning efforts safely, sanitizes invalid efforts, clears stale failures, and allows parallel swarm{action:"add"}', async () => {
+    const storageDir = makeTempDir('ag-v012-store-')
+    const cwd = makeTempDir('ag-v012-cwd-')
+    const ctx = new MockHostContext(cwd)
+    const coord = new MockAgent('coord-v012', cwd)
+    ctx.agentsMap.set(coord.id, coord)
+
+    // Mock DSH v0.2.2-rc.3 ctx.llm where listModels() throws if provider is omitted!
+    ctx.services.set('llm', {
+      listProviders: () => [{ id: 'cpa', name: 'CPA' }],
+      listModels: (provider?: string) => {
+        if (!provider) throw new Error('no adapter registered for provider "undefined"')
+        return [
+          { id: 'qoder/dfmodel', provider: 'cpa', name: 'DeepSeek-Flash · Qoder' },
+          { id: 'qoder/plain', provider: 'cpa', name: 'Plain No-Reasoning' },
+        ]
+      },
+      resolveModelInfo: async (_provider: string, model: string) => {
+        if (model === 'qoder/dfmodel') {
+          return {
+            provider: 'cpa',
+            id: model,
+            name: 'DeepSeek-Flash · Qoder',
+            reasoning: {
+              defaultEffort: 'high',
+              efforts: [
+                { id: 'low', name: 'Low' },
+                { id: 'medium', name: 'Medium' },
+                { id: 'high', name: 'High' },
+              ],
+            },
+          }
+        }
+        return { provider: 'cpa', id: model, name: 'Plain No-Reasoning' }
+      },
+    })
+
+    const store = new SwarmStore(storageDir)
+    const config = resolveSwarmConfig({ storageDir, enableWorktrees: false })
+    const pool = new WorkerPool(ctx, store, config)
+    const toolsHandle = registerSwarmTools(ctx, store, pool)
+    const disposeRoutes = registerSwarmRoutes(ctx, store, pool, { config })
+
+    // 1) tools/swarm isConcurrencySafe allows parallel add/status/models, keeps kill exclusive
+    const swarmTool = ctx.registeredTools.get('swarm')
+    expect(swarmTool.isConcurrencySafe({ action: 'add' })).toBe(true)
+    expect(swarmTool.isConcurrencySafe({ action: 'status' })).toBe(true)
+    expect(swarmTool.isConcurrencySafe({ action: 'models' })).toBe(true)
+    expect(swarmTool.isConcurrencySafe({ action: 'kill' })).toBe(false)
+
+    // 2) listModels() & GET /ag-swarm/api/models return model-driven efforts without crashing host
+    const models = await pool.listModels()
+    expect(models).toHaveLength(2)
+    expect(models[0]?.defaultEffort).toBe('high')
+    expect(models[0]?.efforts?.map((e) => e.id)).toEqual(['low', 'medium', 'high'])
+    expect(models[1]?.reasoningKnown).toBe(true)
+    expect(models[1]?.efforts).toBeUndefined()
+
+    const modelsRes = createMockRes()
+    await ctx.routeHandler!(createMockReq('GET', '/ag-swarm/api/models'), modelsRes.res)
+    expect(modelsRes.status).toBe(200)
+    expect(JSON.parse(modelsRes.chunks.join('')).models).toHaveLength(2)
+
+    // 3) addWorkers strips unsupported reasoningEffort ('xhigh' on cpa/qoder/dfmodel)
+    const swarm = pool.ensureSwarmForSession(coord.id, 'v0.1.2 Test', cwd)
+    const [w1] = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      callerAgent: coord,
+      name: 'scout-1',
+      brief: 'Audit safely',
+      provider: 'cpa',
+      model: 'qoder/dfmodel',
+      reasoning_effort: 'xhigh',
+    })
+    expect(w1.reasoning_effort).toBeUndefined()
+    expect((ctx.createdCalls.at(-1)?.agentOptions as Record<string, unknown>)?.reasoningEffort).toBeUndefined()
+
+    // 4) tools/pre-execute updates live Step + tool activity and clears stale failure
+    store.updateMember(swarm.swarm_id, 'scout-1', {
+      failure: { kind: 'error', message: 'old error', at: new Date().toISOString() },
+      steps_count: 5,
+    })
+    const workerAgent = ctx.agentsMap.get(w1.conversation_id)!
+    const nextMock = vi.fn(async () => ({ kind: 'allow' }))
+    ctx.emit('tools/pre-execute', { agent: workerAgent, name: 'ops_bash' }, nextMock)
+    const updatedAfterTool = store.getSwarm(swarm.swarm_id)!.members['scout-1']!
+    expect(updatedAfterTool.failure).toBeUndefined()
+    expect(updatedAfterTool.activity).toContain('ops_bash')
+
+    // 5) getMemberTranscript parses step timing & assistant/tool blocks
+    workerAgent.session.events.push(
+      { type: 'step/start', time: 1000, data: {} },
+      { type: 'tool/call', time: 2000, data: { name: 'ops_bash', text: 'dir' } },
+      { type: 'step/end', time: 5000, data: {} },
+      { type: 'assistant/message', time: 5100, data: { message: { content: [{ type: 'text', text: 'Done scanning repository.' }] } } },
+    )
+    const tr = await pool.getMemberTranscript(swarm.swarm_id, 'scout-1')
+    expect(tr.steps.some((s) => s.toolName === 'ops_bash')).toBe(true)
+    const assistantStep = tr.steps.find((s) => s.kind === 'assistant')
+    expect(assistantStep?.detail).toContain('Done scanning repository.')
+    expect(assistantStep?.durationMs).toBe(4000)
+
+    disposeRoutes()
+    toolsHandle.dispose()
+    await pool.dispose()
+  })
 })

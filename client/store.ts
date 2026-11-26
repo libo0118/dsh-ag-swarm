@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type {
   BoardMessage,
+  CatalogEffortOption,
   ConfigPayload,
   MemberTranscriptPayload,
   RawFilesPayload,
@@ -11,11 +12,15 @@ import type {
   UiActionRequest,
 } from '../src/shared/protocol'
 
+export type { CatalogEffortOption }
+
 export interface CatalogModelOption {
   provider: string
   model: string
   label: string
-  efforts?: string[]
+  efforts?: CatalogEffortOption[]
+  defaultEffort?: string
+  reasoningKnown?: boolean
 }
 
 export type SwarmSyncState = 'connecting' | 'live' | 'reconnecting' | 'snapshot' | 'stopped'
@@ -42,8 +47,12 @@ interface RemoteReply<T> {
 interface SessionCatalogModel {
   id?: string
   name?: string
-  efforts?: string[]
-  reasoningEfforts?: string[]
+  efforts?: Array<string | { id?: string; name?: string; description?: string }>
+  reasoningEfforts?: Array<string | { id?: string; name?: string; description?: string }>
+  reasoning?: {
+    efforts?: Array<string | { id?: string; name?: string; description?: string }>
+    defaultEffort?: string
+  }
 }
 
 interface SessionCatalogGroup {
@@ -80,19 +89,64 @@ type StoreListener = (state: SwarmClientState) => void
 
 let getFaces: () => CatalogFaces = () => ({})
 
+function normalizeEfforts(
+  raw: Array<string | { id?: string; name?: string; description?: string }> | undefined,
+): CatalogEffortOption[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  const seen = new Set<string>()
+  const out: CatalogEffortOption[] = []
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      const id = item.trim()
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      out.push({ id, name: id })
+    } else if (item && typeof item === 'object' && typeof item.id === 'string') {
+      const id = item.id.trim()
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      out.push({
+        id,
+        name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : id,
+        ...(typeof item.description === 'string' && item.description ? { description: item.description } : {}),
+      })
+    }
+  }
+  return out.length > 0 ? out : undefined
+}
+
 async function fetchCatalogModels(): Promise<CatalogModelOption[]> {
   const faces = getFaces()
   const remote = faces.remote
   const collected = new Map<string, CatalogModelOption>()
 
-  const addModel = (provider: string, id: string, name?: string, efforts?: string[]): void => {
+  const addModel = (
+    provider: string,
+    id: string,
+    name?: string,
+    rawEfforts?: Array<string | { id?: string; name?: string; description?: string }>,
+    defaultEffort?: string,
+    reasoningKnown?: boolean,
+  ): void => {
     const key = `${provider}/${id}`
-    if (!collected.has(key)) {
+    const efforts = normalizeEfforts(rawEfforts)
+    const next: CatalogModelOption = {
+      provider,
+      model: id,
+      label: name && name !== id ? `${name} (${provider})` : `${provider}/${id}`,
+      ...(efforts ? { efforts } : {}),
+      ...(typeof defaultEffort === 'string' && defaultEffort.trim() ? { defaultEffort: defaultEffort.trim() } : {}),
+      ...(reasoningKnown ? { reasoningKnown: true } : {}),
+    }
+    const existing = collected.get(key)
+    if (!existing) {
+      collected.set(key, next)
+    } else if (next.reasoningKnown && (!existing.reasoningKnown || (next.efforts && !existing.efforts))) {
       collected.set(key, {
-        provider,
-        model: id,
-        label: name && name !== id ? `${name} (${provider})` : `${provider}/${id}`,
-        ...(efforts && efforts.length > 0 ? { efforts } : {}),
+        ...existing,
+        ...(next.efforts ? { efforts: next.efforts } : {}),
+        ...(next.defaultEffort ? { defaultEffort: next.defaultEffort } : {}),
+        reasoningKnown: true,
       })
     }
   }
@@ -105,13 +159,32 @@ async function fetchCatalogModels(): Promise<CatalogModelOption[]> {
           if (!group?.id) continue
           for (const m of group.models ?? []) {
             if (!m?.id) continue
-            addModel(group.id, m.id, m.name, m.efforts ?? m.reasoningEfforts)
+            addModel(
+              group.id,
+              m.id,
+              m.name,
+              m.reasoning?.efforts ?? m.efforts ?? m.reasoningEfforts,
+              m.reasoning?.defaultEffort,
+              true,
+            )
           }
         }
         if (collected.size > 0) return sortModels([...collected.values()])
       }
-    } catch { /* fall through to remote.llm */ }
+    } catch { /* fall through to backend /api/models or remote.llm */ }
   }
+
+  try {
+    const apiRes = await fetch('/ag-swarm/api/models', { cache: 'no-store' })
+    if (apiRes.ok) {
+      const body = (await apiRes.json()) as { models?: CatalogModelOption[] }
+      for (const m of body.models ?? []) {
+        if (!m?.model) continue
+        addModel(m.provider || 'default', m.model, m.label, m.efforts, m.defaultEffort, m.reasoningKnown ?? true)
+      }
+      if (collected.size > 0) return sortModels([...collected.values()])
+    }
+  } catch { /* fall through to remote.llm */ }
 
   if (remote?.llm) {
     try {
@@ -133,7 +206,16 @@ async function fetchCatalogModels(): Promise<CatalogModelOption[]> {
             const res = await remote.llm!.discoverModels(entry.settingsNs, { provider: entry.provider })
             if (!res.ok) return
             for (const m of res.value ?? []) {
-              if (m?.id) addModel(entry.provider, m.id, m.name, m.efforts ?? m.reasoningEfforts)
+              if (m?.id) {
+                addModel(
+                  entry.provider,
+                  m.id,
+                  m.name,
+                  m.reasoning?.efforts ?? m.efforts ?? m.reasoningEfforts,
+                  m.reasoning?.defaultEffort,
+                  m.reasoning !== undefined || m.efforts !== undefined || m.reasoningEfforts !== undefined,
+                )
+              }
             }
           } catch { /* skip provider that refuses discovery */ }
         }),
@@ -149,7 +231,16 @@ async function fetchCatalogModels(): Promise<CatalogModelOption[]> {
         for (const group of modelsReply.result.value?.groups ?? []) {
           if (!group?.id) continue
           for (const m of group.models ?? []) {
-            if (m?.id) addModel(group.id, m.id, m.name, m.efforts ?? m.reasoningEfforts)
+            if (m?.id) {
+              addModel(
+                group.id,
+                m.id,
+                m.name,
+                m.reasoning?.efforts ?? m.efforts ?? m.reasoningEfforts,
+                m.reasoning?.defaultEffort,
+                true,
+              )
+            }
           }
         }
       }
@@ -204,6 +295,8 @@ export class SwarmClientStore {
   private source: EventSource | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private refetchTimer: ReturnType<typeof setTimeout> | null = null
+  private pollTimer: ReturnType<typeof setTimeout> | null = null
+  private visibilityListener: (() => void) | null = null
   private inFlight: AbortController | null = null
   private refs = 0
   private stopped = true
@@ -406,6 +499,28 @@ export class SwarmClientStore {
     void this.refresh({ force: true })
     void this.listModels()
     this.openEventSource(gen)
+    this.schedulePoll(gen)
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      const onVis = (): void => {
+        if (document.visibilityState === 'visible') this.scheduleRefetch(40)
+      }
+      this.visibilityListener = onVis
+      document.addEventListener('visibilitychange', onVis)
+    }
+  }
+
+  private schedulePoll(gen: number): void {
+    if (this.stopped || gen !== this.generation) return
+    if (this.pollTimer) clearTimeout(this.pollTimer)
+    const snap = this.state.snapshot
+    const active = snap ? Object.values(snap.members).some((m) => !m.killed && m.state === 'working') : false
+    const interval = active || this.state.sync !== 'live' ? 1500 : 6000
+    this.pollTimer = setTimeout(() => {
+      this.pollTimer = null
+      if (this.stopped || gen !== this.generation) return
+      this.scheduleRefetch(0)
+      this.schedulePoll(gen)
+    }, interval)
   }
 
   private openEventSource(gen: number): void {
@@ -439,15 +554,16 @@ export class SwarmClientStore {
           return
         }
         if (payload.type === 'swarm_update') {
-          this.scheduleRefetch(120)
+          this.scheduleRefetch(50)
         }
       } catch {
-        this.scheduleRefetch(150)
+        this.scheduleRefetch(100)
       }
     }
     es.onerror = () => {
       if (!owns()) return
       this.patch({ sync: 'reconnecting' })
+      this.scheduleRefetch(300)
       if (es.readyState === EventSource.CLOSED) {
         es.close()
         this.source = null
@@ -474,6 +590,14 @@ export class SwarmClientStore {
     if (this.refetchTimer) {
       clearTimeout(this.refetchTimer)
       this.refetchTimer = null
+    }
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer)
+      this.pollTimer = null
+    }
+    if (this.visibilityListener && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityListener)
+      this.visibilityListener = null
     }
     this.inFlight?.abort()
     this.inFlight = null

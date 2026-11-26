@@ -23,7 +23,6 @@ const DEFAULT_CONFIG: ConfigPayload = {
   modelPresets: {},
 }
 
-const DEFAULT_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const
 const ROLE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,23}$/
 const BUILTIN_SET = new Set<string>(BUILTIN_MODEL_ROLES)
 
@@ -154,10 +153,15 @@ export function RoleModelPresetsCard(): JSX.Element {
       for (const role of allRoleKeys) {
         const p = draftPresets[role]
         if (p && p.model.trim()) {
+          const cat = catalogByKey.get(catalogKey(p.provider, p.model))
+          const rawEff = p.reasoningEffort?.trim()
+          const validEff = rawEff && (!cat?.reasoningKnown || cat.efforts?.some((e) => e.id === rawEff))
+            ? rawEff
+            : undefined
           cleaned[role] = {
             ...(p.provider?.trim() ? { provider: p.provider.trim() } : {}),
             model: p.model.trim(),
-            ...(p.reasoningEffort?.trim() ? { reasoningEffort: p.reasoningEffort.trim() } : {}),
+            ...(validEff ? { reasoningEffort: validEff } : {}),
             ...(p.label?.trim() ? { label: p.label.trim() } : {}),
           }
         }
@@ -219,12 +223,14 @@ export function RoleModelPresetsCard(): JSX.Element {
           const matchedCatalog = curKey ? catalogByKey.get(curKey) : undefined
           const hasUnknownSaved = Boolean(preset?.model && !matchedCatalog)
           const isManual = Boolean(manualRoles[role]) || (storeState.models.length === 0 && Boolean(preset?.model))
-          const effortList = matchedCatalog?.efforts && matchedCatalog.efforts.length > 0
-            ? matchedCatalog.efforts
-            : [...DEFAULT_EFFORTS]
-          const effortOptions = preset?.reasoningEffort && !effortList.includes(preset.reasoningEffort)
-            ? [...effortList, preset.reasoningEffort]
-            : effortList
+          const supportedEfforts = matchedCatalog?.efforts ?? []
+          const savedEffort = preset?.reasoningEffort?.trim() || ''
+          const savedUnsupported = Boolean(
+            savedEffort && matchedCatalog?.reasoningKnown && !supportedEfforts.some((e) => e.id === savedEffort),
+          )
+          const defaultEffortLabel = matchedCatalog?.defaultEffort
+            ? `${t('settings.effortDefault')} (${matchedCatalog.defaultEffort})`
+            : t('settings.effortDefault')
 
           return (
             <div
@@ -270,20 +276,23 @@ export function RoleModelPresetsCard(): JSX.Element {
                     }
                     const opt = catalogByKey.get(val)
                     if (opt) {
-                      updateRolePreset(role, (prev) => ({
-                        provider: opt.provider,
-                        model: opt.model,
-                        label: opt.label,
-                        ...(prev?.reasoningEffort ? { reasoningEffort: prev.reasoningEffort } : {}),
-                      }))
+                      updateRolePreset(role, (prev) => {
+                        const prevEffort = prev?.reasoningEffort?.trim()
+                        const keepEffort = Boolean(prevEffort && opt.efforts?.some((ef) => ef.id === prevEffort))
+                        return {
+                          provider: opt.provider,
+                          model: opt.model,
+                          label: opt.label,
+                          ...(keepEffort && prevEffort ? { reasoningEffort: prevEffort } : {}),
+                        }
+                      })
                     } else {
                       const sep = val.indexOf('::')
                       const provider = sep >= 0 ? val.slice(0, sep) : ''
                       const model = sep >= 0 ? val.slice(sep + 2) : val
-                      updateRolePreset(role, (prev) => ({
+                      updateRolePreset(role, () => ({
                         ...(provider ? { provider } : {}),
                         model,
-                        ...(prev?.reasoningEffort ? { reasoningEffort: prev.reasoningEffort } : {}),
                       }))
                     }
                   }}
@@ -344,37 +353,90 @@ export function RoleModelPresetsCard(): JSX.Element {
                 />
               )}
 
-              <select
-                aria-label={`${role} reasoning effort`}
-                value={preset?.reasoningEffort ?? ''}
-                disabled={!preset?.model?.trim()}
-                onChange={(e) => {
-                  const eff = e.target.value
-                  updateRolePreset(role, (prev) => {
-                    if (!prev?.model) return prev
-                    return {
-                      ...(prev.provider ? { provider: prev.provider } : {}),
-                      model: prev.model,
-                      ...(prev.label ? { label: prev.label } : {}),
-                      ...(eff ? { reasoningEffort: eff } : {}),
-                    }
-                  })
-                }}
-                style={{
-                  flex: '0 0 116px',
-                  height: 30,
-                  padding: '0 8px',
-                  borderRadius: 6,
-                  border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
-                  background: 'var(--ag-bg, #f7f7f8)',
-                  fontSize: 12,
-                }}
-              >
-                <option value="">{t('settings.effortDefault')}</option>
-                {effortOptions.map((ef) => (
-                  <option key={ef} value={ef}>{ef}</option>
-                ))}
-              </select>
+              {!isManual && matchedCatalog ? (
+                <select
+                  aria-label={`${role} reasoning effort`}
+                  value={savedEffort}
+                  disabled={!preset?.model?.trim() || (supportedEfforts.length === 0 && !savedUnsupported)}
+                  onChange={(e) => {
+                    const eff = e.target.value
+                    updateRolePreset(role, (prev) => {
+                      if (!prev?.model) return prev
+                      return {
+                        ...(prev.provider ? { provider: prev.provider } : {}),
+                        model: prev.model,
+                        ...(prev.label ? { label: prev.label } : {}),
+                        ...(eff ? { reasoningEffort: eff } : {}),
+                      }
+                    })
+                  }}
+                  style={{
+                    flex: '0 0 132px',
+                    height: 30,
+                    padding: '0 8px',
+                    borderRadius: 6,
+                    border: `1px solid ${savedUnsupported ? 'var(--ag-warning, #bca136)' : 'var(--ag-border, rgba(128,128,128,0.2))'}`,
+                    background: 'var(--ag-bg, #f7f7f8)',
+                    fontSize: 12,
+                  }}
+                >
+                  {supportedEfforts.length === 0 ? (
+                    <>
+                      <option value="">
+                        {savedUnsupported
+                          ? (isZh ? '清除不支持的思维度' : 'Clear unsupported')
+                          : (isZh ? '该模型不支持思维度' : 'Not supported')}
+                      </option>
+                      {savedUnsupported && (
+                        <option value={savedEffort}>
+                          {savedEffort} ({isZh ? '不支持' : 'unsupported'})
+                        </option>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <option value="">{defaultEffortLabel}</option>
+                      {supportedEfforts.map((ef) => (
+                        <option key={ef.id} value={ef.id}>{ef.name}</option>
+                      ))}
+                      {savedUnsupported && (
+                        <option value={savedEffort}>
+                          {savedEffort} ({isZh ? '不支持' : 'unsupported'})
+                        </option>
+                      )}
+                    </>
+                  )}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  aria-label={`${role} reasoning effort`}
+                  value={preset?.reasoningEffort ?? ''}
+                  disabled={!preset?.model?.trim()}
+                  placeholder={isZh ? '默认思维度（可选）' : 'Default effort (optional)'}
+                  onChange={(e) => {
+                    const eff = e.target.value
+                    updateRolePreset(role, (prev) => {
+                      if (!prev?.model) return prev
+                      return {
+                        ...(prev.provider ? { provider: prev.provider } : {}),
+                        model: prev.model,
+                        ...(prev.label ? { label: prev.label } : {}),
+                        ...(eff.trim() ? { reasoningEffort: eff } : {}),
+                      }
+                    })
+                  }}
+                  style={{
+                    flex: '0 0 132px',
+                    height: 30,
+                    padding: '0 8px',
+                    borderRadius: 6,
+                    border: '1px solid var(--ag-border, rgba(128,128,128,0.2))',
+                    background: 'var(--ag-bg, #f7f7f8)',
+                    fontSize: 12,
+                  }}
+                />
+              )}
 
               <button
                 type="button"

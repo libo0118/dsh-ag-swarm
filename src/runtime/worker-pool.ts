@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   BoardMessage,
+  CatalogEffortOption,
   MemberRecord,
   MemberTranscriptPayload,
   RoleModelMap,
@@ -85,7 +86,9 @@ export interface CatalogModelInfo {
   provider: string
   model: string
   label: string
-  efforts?: string[]
+  efforts?: CatalogEffortOption[]
+  defaultEffort?: string
+  reasoningKnown?: boolean
 }
 
 interface LiveWorkerHandle {
@@ -178,9 +181,9 @@ export class WorkerPool {
     return this.modelPresets.setAll(next)
   }
 
-  getModelCatalogWithPresets(): { models: CatalogModelInfo[]; role_presets: RoleModelMap } {
+  async getModelCatalogWithPresets(): Promise<{ models: CatalogModelInfo[]; role_presets: RoleModelMap }> {
     return {
-      models: this.listModels(),
+      models: await this.listModels(),
       role_presets: this.modelPresets.getAll(),
     }
   }
@@ -241,10 +244,30 @@ export class WorkerPool {
       if (ref) {
         const member = this.store.getSwarm(ref.swarmId)?.members[ref.memberName]
         if (member && !isKilled(member)) {
+          const nextSteps = (member.steps_count ?? 0) + 1
+          const stepNum = payload.step ?? nextSteps
           this.store.updateMember(ref.swarmId, ref.memberName, {
-            steps_count: (member.steps_count ?? 0) + 1,
-            activity: `Step #${payload.step ?? (member.steps_count ?? 0) + 1}`,
+            steps_count: nextSteps,
+            activity: `Step #${stepNum}`,
             activity_kind: 'thinking',
+            ...(member.failure && stepNum > 1 ? { failure: undefined } : {}),
+          })
+        }
+      }
+      return typeof next === 'function' ? next() : undefined
+    })
+
+    safeOn('tools/pre-execute', async (exec: { agent?: HostAgentLike; name?: string }, next?: () => Promise<unknown>) => {
+      const id = exec?.agent?.id ?? exec?.agent?.session?.id
+      const ref = id ? this.sessionIndex.get(id) : undefined
+      if (ref && typeof exec?.name === 'string' && exec.name) {
+        const member = this.store.getSwarm(ref.swarmId)?.members[ref.memberName]
+        if (member && !isKilled(member)) {
+          this.store.updateMember(ref.swarmId, ref.memberName, {
+            state: 'working',
+            activity: member.steps_count ? `Step #${member.steps_count} · ${exec.name}` : `Calling ${exec.name}`,
+            activity_kind: 'tool',
+            ...(member.failure ? { failure: undefined } : {}),
           })
         }
       }
@@ -264,14 +287,21 @@ export class WorkerPool {
         this.store.updateMember(ref.swarmId, ref.memberName, {
           activity: `Calling ${toolName}`,
           activity_kind: 'tool',
+          ...(member.failure ? { failure: undefined } : {}),
         })
       } else if (chunk.type === 'reasoning' || chunk.type === 'thinking') {
-        if (member.activity_kind !== 'thinking') {
+        if (member.activity_kind !== 'thinking' || member.failure) {
           this.store.updateMember(ref.swarmId, ref.memberName, {
             activity: 'Thinking…',
             activity_kind: 'thinking',
+            ...(member.failure ? { failure: undefined } : {}),
           })
         }
+      } else if ((chunk.type === 'text' || chunk.type === 'text-delta') && member.failure) {
+        this.store.updateMember(ref.swarmId, ref.memberName, {
+          failure: undefined,
+          activity_kind: member.activity_kind === 'error' ? 'thinking' : member.activity_kind,
+        })
       }
     })
 
@@ -567,13 +597,19 @@ export class WorkerPool {
     const routeChanged =
       (providerName !== undefined && providerName !== parentProvider) ||
       (resolvedModel?.model !== undefined && resolvedModel.model !== parentModel)
-    const reasoningEffort =
+    const rawReasoningEffort =
       resolvedModel?.reasoningEffort ||
       params.reasoningEffort ||
       (!routeChanged
         ? (callerMember?.reasoning_effort ||
           (typeof inherited.agentOptions.reasoningEffort === 'string' ? inherited.agentOptions.reasoningEffort : undefined))
         : undefined)
+    const effectiveModelForValidation = resolvedModel?.model ?? parentModel ?? callerModel
+    const reasoningEffort = await this.sanitizeReasoningEffort(
+      providerName,
+      effectiveModelForValidation,
+      rawReasoningEffort,
+    )
     const modelDisplayName = resolvedModel?.label || modelName
 
     const member = this.store.addMember(swarm.swarm_id, {
@@ -1081,24 +1117,31 @@ export class WorkerPool {
       throw new Error(`Cannot switch model for "@${target.name}" while it is working; wait until it is waiting or stopped`)
     }
 
+    const nextProvider = input.provider ?? target.provider
+    const sameRoute = nextProvider === target.provider && input.model === target.model
+    const rawEffort = input.reasoning_effort !== undefined
+      ? (input.reasoning_effort.trim() || undefined)
+      : (sameRoute ? target.reasoning_effort : undefined)
+    const validatedEffort = await this.sanitizeReasoningEffort(nextProvider, input.model, rawEffort)
+
     const agents = this.ctx.get<HostAgentsLike>('agents')
     const live = this.liveHandles.get(target.conversation_id)?.agent ?? agents?.get?.(target.conversation_id)
     if (live) {
       await selectAgentModelCompat(live, {
-        provider: input.provider ?? target.provider,
+        provider: nextProvider,
         model: input.model,
-        reasoningEffort: input.reasoning_effort,
+        reasoningEffort: validatedEffort,
       })
     }
 
-    const clearedFailure = target.failure?.kind === 'quota' ? undefined : target.failure
     return this.store.updateMember(swarm.swarm_id, target.name, {
       model: input.model,
-      provider: input.provider ?? target.provider,
+      provider: nextProvider,
       model_display_name: input.model,
-      reasoning_effort: input.reasoning_effort ?? target.reasoning_effort,
-      failure: clearedFailure,
+      reasoning_effort: validatedEffort,
+      failure: undefined,
       activity: `Switched model to ${input.model}`,
+      activity_kind: target.activity_kind === 'error' ? 'idle' : target.activity_kind,
     })
   }
 
@@ -1189,19 +1232,150 @@ export class WorkerPool {
     }
   }
 
-  listModels(): CatalogModelInfo[] {
+  private async sanitizeReasoningEffort(
+    provider: string | undefined,
+    model: string | undefined,
+    effort: string | undefined,
+  ): Promise<string | undefined> {
+    const trimmed = typeof effort === 'string' ? effort.trim() : ''
+    if (!trimmed) return undefined
+    if (!provider || !model || model === 'default') return trimmed
+    const llm = this.ctx.get<{
+      resolveModelInfo?: (provider: string, model: string) => unknown
+    }>('llm')
+    if (typeof llm?.resolveModelInfo !== 'function') return trimmed
+    try {
+      const info = await Promise.resolve(llm.resolveModelInfo(provider, model)) as {
+        reasoning?: { efforts?: Array<{ id?: unknown }> }
+      } | undefined
+      if (!info || typeof info !== 'object') return trimmed
+      const efforts = info.reasoning?.efforts
+      if (!Array.isArray(efforts) || efforts.length === 0) {
+        this.ctx.logger?.('ag-swarm').warn(
+          'stripping unsupported reasoningEffort "%s" for %s/%s (model does not support reasoning efforts)',
+          trimmed,
+          provider,
+          model,
+        )
+        return undefined
+      }
+      if (!efforts.some((e) => typeof e?.id === 'string' && e.id === trimmed)) {
+        this.ctx.logger?.('ag-swarm').warn(
+          'stripping unsupported reasoningEffort "%s" for %s/%s',
+          trimmed,
+          provider,
+          model,
+        )
+        return undefined
+      }
+      return trimmed
+    } catch {
+      return trimmed
+    }
+  }
+
+  async listModels(): Promise<CatalogModelInfo[]> {
     const out: CatalogModelInfo[] = []
-    const llm = this.ctx.get<{ listModels?: () => unknown[]; models?: unknown[] }>('llm')
-    const raw = typeof llm?.listModels === 'function' ? llm.listModels() : Array.isArray(llm?.models) ? llm.models : []
-    for (const item of raw) {
-      if (!item || typeof item !== 'object') continue
-      const rec = item as Record<string, unknown>
-      const model = typeof rec.model === 'string' ? rec.model : typeof rec.id === 'string' ? rec.id : ''
-      if (!model) continue
-      const provider = typeof rec.provider === 'string' ? rec.provider : 'default'
-      const label = typeof rec.label === 'string' ? rec.label : typeof rec.name === 'string' ? rec.name : `${provider}/${model}`
-      const efforts = Array.isArray(rec.efforts) ? rec.efforts.map(String) : undefined
-      out.push({ provider, model, label, ...(efforts ? { efforts } : {}) })
+    const llm = this.ctx.get<{
+      listProviders?: () => unknown
+      listModels?: (provider?: string) => unknown
+      resolveModelInfo?: (provider: string, model: string) => unknown
+      models?: unknown[]
+    }>('llm')
+    if (!llm) return out
+
+    const pushEfforts = (rawReasoning: unknown): { efforts?: CatalogEffortOption[]; defaultEffort?: string } => {
+      if (!rawReasoning || typeof rawReasoning !== 'object') return {}
+      const r = rawReasoning as { efforts?: unknown[]; defaultEffort?: unknown }
+      if (!Array.isArray(r.efforts) || r.efforts.length === 0) return {}
+      const efforts: CatalogEffortOption[] = []
+      for (const item of r.efforts) {
+        if (typeof item === 'string' && item.trim()) {
+          efforts.push({ id: item.trim(), name: item.trim() })
+        } else if (item && typeof item === 'object') {
+          const obj = item as { id?: unknown; name?: unknown; description?: unknown }
+          if (typeof obj.id === 'string' && obj.id.trim()) {
+            efforts.push({
+              id: obj.id.trim(),
+              name: typeof obj.name === 'string' && obj.name.trim() ? obj.name.trim() : obj.id.trim(),
+              ...(typeof obj.description === 'string' && obj.description ? { description: obj.description } : {}),
+            })
+          }
+        }
+      }
+      const defaultEffort = typeof r.defaultEffort === 'string' && r.defaultEffort.trim() ? r.defaultEffort.trim() : undefined
+      return { ...(efforts.length > 0 ? { efforts } : {}), ...(defaultEffort ? { defaultEffort } : {}) }
+    }
+
+    try {
+      if (typeof llm.listProviders === 'function' && typeof llm.listModels === 'function') {
+        const providersRaw = await Promise.resolve(llm.listProviders())
+        const providers = Array.isArray(providersRaw) ? providersRaw : []
+        for (const pItem of providers) {
+          const pRec = (pItem && typeof pItem === 'object' ? pItem : {}) as Record<string, unknown>
+          const providerId = typeof pRec.id === 'string' ? pRec.id : typeof pRec.provider === 'string' ? pRec.provider : ''
+          if (!providerId) continue
+          try {
+            const modelsRaw = await Promise.resolve(llm.listModels(providerId))
+            const models = Array.isArray(modelsRaw) ? modelsRaw : []
+            for (const mItem of models) {
+              if (!mItem || typeof mItem !== 'object') continue
+              const mRec = mItem as Record<string, unknown>
+              const modelId = typeof mRec.id === 'string' ? mRec.id : typeof mRec.model === 'string' ? mRec.model : ''
+              if (!modelId) continue
+              let effortsMeta: { efforts?: CatalogEffortOption[]; defaultEffort?: string } = {}
+              let reasoningKnown = false
+              if (typeof llm.resolveModelInfo === 'function') {
+                try {
+                  const resolved = await Promise.resolve(llm.resolveModelInfo(providerId, modelId)) as Record<string, unknown> | undefined
+                  if (resolved && typeof resolved === 'object') {
+                    reasoningKnown = true
+                    effortsMeta = pushEfforts(resolved.reasoning)
+                  }
+                } catch { /* per-model resolve fallback */ }
+              }
+              if (!reasoningKnown && Array.isArray(mRec.efforts)) {
+                reasoningKnown = true
+                effortsMeta = pushEfforts({ efforts: mRec.efforts })
+              }
+              const label = typeof mRec.name === 'string' && mRec.name !== modelId
+                ? `${mRec.name} (${providerId})`
+                : typeof mRec.label === 'string'
+                  ? mRec.label
+                  : `${providerId}/${modelId}`
+              out.push({
+                provider: providerId,
+                model: modelId,
+                label,
+                ...(effortsMeta.efforts ? { efforts: effortsMeta.efforts } : {}),
+                ...(effortsMeta.defaultEffort ? { defaultEffort: effortsMeta.defaultEffort } : {}),
+                ...(reasoningKnown ? { reasoningKnown: true } : {}),
+              })
+            }
+          } catch { /* skip provider that refuses listModels */ }
+        }
+        return out
+      }
+
+      const raw = Array.isArray(llm.models) ? llm.models : []
+      for (const item of raw) {
+        if (!item || typeof item !== 'object') continue
+        const rec = item as Record<string, unknown>
+        const model = typeof rec.model === 'string' ? rec.model : typeof rec.id === 'string' ? rec.id : ''
+        if (!model) continue
+        const provider = typeof rec.provider === 'string' ? rec.provider : 'default'
+        const label = typeof rec.label === 'string' ? rec.label : typeof rec.name === 'string' ? rec.name : `${provider}/${model}`
+        const meta = rec.reasoning ? pushEfforts(rec.reasoning) : Array.isArray(rec.efforts) ? pushEfforts({ efforts: rec.efforts }) : {}
+        out.push({
+          provider,
+          model,
+          label,
+          ...(meta.efforts ? { efforts: meta.efforts } : {}),
+          ...(meta.defaultEffort ? { defaultEffort: meta.defaultEffort } : {}),
+        })
+      }
+    } catch {
+      // Never crash the host on model catalog lookup.
     }
     return out
   }
@@ -1214,39 +1388,83 @@ export class WorkerPool {
 
     const snap = await readSessionSeed(this.ctx, member.conversation_id)
     const steps: TranscriptStepView[] = []
+    let stepStartTs: number | undefined
+    let lastDurationMs: number | undefined
+
+    const pushStep = (step: Omit<TranscriptStepView, 'index'>): void => {
+      steps.push({ index: steps.length + 1, ...step })
+    }
 
     for (let i = 0; i < snap.events.length; i++) {
       const ev = snap.events[i] as Record<string, unknown> | undefined
       if (!ev || typeof ev !== 'object') continue
       const type = String(ev.type ?? '')
       const data = (ev.data ?? {}) as Record<string, unknown>
-      const time = typeof ev.time === 'number' ? new Date(ev.time).toISOString() : undefined
+      const ts = typeof ev.time === 'number' && Number.isFinite(ev.time) ? ev.time : undefined
+      const time = ts !== undefined ? new Date(ts).toISOString() : undefined
+
+      if (type === 'step/start') {
+        if (ts !== undefined) stepStartTs = ts
+        continue
+      }
+      if (type === 'step/end') {
+        if (ts !== undefined && stepStartTs !== undefined && ts >= stepStartTs) {
+          lastDurationMs = ts - stepStartTs
+        }
+        stepStartTs = undefined
+        continue
+      }
 
       if (type === 'user/message') {
-        steps.push({ index: steps.length + 1, kind: 'user', title: 'Prompt / Wakeup', detail: extractEventText(data), time, status: 'ok' })
+        pushStep({ kind: 'user', title: 'Prompt / Wakeup', detail: extractEventText(data, 2000), time, ts, status: 'ok' })
       } else if (type === 'assistant/message' || type === 'assistant/attempt') {
-        steps.push({ index: steps.length + 1, kind: 'assistant', title: 'Assistant response', detail: extractEventText(data), time, status: 'ok' })
-      } else if (type === 'tool/call' || type === 'tool/result') {
+        const msg = data.message as { content?: unknown } | undefined
+        const content = msg?.content ?? data.content
+        const stepDuration = typeof data.durationMs === 'number' ? data.durationMs : lastDurationMs
+        lastDurationMs = undefined
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (!block || typeof block !== 'object') continue
+            const rec = block as Record<string, unknown>
+            const bType = String(rec.type ?? '')
+            if (bType === 'thinking' || bType === 'reasoning') {
+              const txt = String(rec.thinking ?? rec.text ?? '').trim()
+              if (txt) pushStep({ kind: 'thinking', title: 'Thinking', detail: txt.slice(0, 1500), time, ts, status: 'ok' })
+            } else if (bType === 'tool-call' || bType === 'tool_use') {
+              const toolName = String(rec.name ?? rec.toolName ?? 'tool')
+              pushStep({ kind: 'tool', toolName, title: `Call: ${toolName}`, detail: extractEventText(rec, 1500), time, ts, status: 'ok' })
+            } else if (bType === 'text') {
+              const txt = String(rec.text ?? '').trim()
+              if (txt) pushStep({ kind: 'assistant', title: 'Assistant response', detail: txt.slice(0, 4000), time, ts, durationMs: stepDuration, status: 'ok' })
+            }
+          }
+        } else {
+          const detail = extractEventText(data, 4000)
+          if (detail) pushStep({ kind: 'assistant', title: 'Assistant response', detail, time, ts, durationMs: stepDuration, status: 'ok' })
+        }
+      } else if (type === 'tool/call' || type === 'tool/result' || type === 'tool/ptc-dispatch') {
         const toolName = String(data.name ?? data.toolName ?? 'tool')
-        steps.push({
-          index: steps.length + 1,
+        const prefix = type === 'tool/result' ? 'Result' : 'Call'
+        pushStep({
           kind: 'tool',
-          title: `${type === 'tool/call' ? 'Call' : 'Result'}: ${toolName}`,
-          detail: extractEventText(data),
+          toolName,
+          title: `${prefix}: ${toolName}`,
+          detail: extractEventText(data, 1500),
           time,
+          ts,
           status: data.isError === true ? 'error' : 'ok',
         })
       } else if (type === 'model/selection') {
-        steps.push({
-          index: steps.length + 1,
+        pushStep({
           kind: 'model',
           title: `Model switched to ${String(data.model ?? '')}`,
           detail: `${String(data.provider ?? '')}/${String(data.model ?? '')}`,
           time,
+          ts,
           status: 'ok',
         })
       } else if (type.includes('error')) {
-        steps.push({ index: steps.length + 1, kind: 'error', title: 'Error', detail: extractEventText(data), time, status: 'error' })
+        pushStep({ kind: 'error', title: 'Error', detail: extractEventText(data, 1500), time, ts, status: 'error' })
       }
     }
 
@@ -1264,6 +1482,8 @@ export class WorkerPool {
       }
     }
 
+    const boundedSteps = steps.length > 300 ? steps.slice(-300) : steps
+
     return {
       swarm_id: swarm.swarm_id,
       member: member.name,
@@ -1272,7 +1492,11 @@ export class WorkerPool {
       workspace_mode: member.workspace_mode,
       workspace: member.workspace,
       branch: member.branch,
-      steps,
+      state: member.state,
+      activity: member.activity,
+      steps_count: member.steps_count,
+      failure: member.failure,
+      steps: boundedSteps,
     }
   }
 
@@ -1335,19 +1559,19 @@ export class WorkerPool {
   }
 }
 
-function extractEventText(data: Record<string, unknown>): string {
-  if (typeof data.text === 'string') return data.text.slice(0, 600)
+function extractEventText(data: Record<string, unknown>, maxChars = 600): string {
+  if (typeof data.text === 'string') return data.text.slice(0, maxChars)
   const msg = data.message as { content?: unknown } | undefined
   const content = msg?.content ?? data.content
-  if (typeof content === 'string') return content.slice(0, 600)
+  if (typeof content === 'string') return content.slice(0, maxChars)
   if (Array.isArray(content)) {
     const parts = content
       .map((b) => (typeof b === 'object' && b !== null && 'text' in b ? String((b as { text?: unknown }).text ?? '') : ''))
       .filter(Boolean)
-    if (parts.length > 0) return parts.join('\n').slice(0, 600)
+    if (parts.length > 0) return parts.join('\n').slice(0, maxChars)
   }
   try {
-    return JSON.stringify(data).slice(0, 400)
+    return JSON.stringify(data).slice(0, Math.min(maxChars, 1500))
   } catch {
     return ''
   }

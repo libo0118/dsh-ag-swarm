@@ -5,11 +5,12 @@ import { useSwarmStore } from '../store'
 import { OverviewTab } from './OverviewTab'
 import { BoardTab, type JumpTarget } from './BoardTab'
 import { MembersTab } from './MembersTab'
+import { SubagentsTab } from './SubagentsTab'
 import { GraphTab } from './GraphTab'
 import { RawTab } from './RawTab'
 import { RoleModelPresetsCard } from './SettingsSection'
 
-export type WorkspaceTab = 'overview' | 'feed' | 'members' | 'graph' | 'raw'
+export type WorkspaceTab = 'overview' | 'feed' | 'subagents' | 'members' | 'graph' | 'raw'
 
 export interface SwarmWorkspaceProps {
   sessionId?: string
@@ -57,6 +58,12 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
   const [toast, setToast] = useState<string | null>(null)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const [showRoleModels, setShowRoleModels] = useState(false)
+  const [selectedSubagent, setSelectedSubagent] = useState<string | null>(null)
+
+  const openSubagent = useCallback((memberName: string) => {
+    setSelectedSubagent(memberName)
+    setTab('subagents')
+  }, [])
 
   useEffect(() => {
     if (!showRoleModels) return
@@ -117,10 +124,12 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
   }, [snapshot, loadingEarlier, fetchMessagesBefore])
 
   const counts = useMemo(() => {
-    if (!snapshot) return { members: 0, attention: 0 }
-    const liveMembers = Object.values(snapshot.members).filter((m) => !m.killed).length
+    if (!snapshot) return { members: 0, workers: 0, attention: 0 }
+    const all = Object.values(snapshot.members)
+    const liveMembers = all.filter((m) => !m.killed).length
+    const workers = all.filter((m) => m.role !== 'coordinator' && m.role !== 'monitor' && !m.killed).length
     const attention = snapshot.systemAttention.length + (snapshot.stallBanner ? 1 : 0)
-    return { members: liveMembers, attention }
+    return { members: liveMembers, workers, attention }
   }, [snapshot])
 
   const liveClass = sync === 'live' ? '' : error ? 'error' : 'stale'
@@ -221,6 +230,17 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
           <button
             type="button"
             role="tab"
+            className={`ag-tab ${tab === 'subagents' ? 'active' : ''}`}
+            aria-selected={tab === 'subagents'}
+            data-testid="swarm-tab-subagents"
+            onClick={() => setTab('subagents')}
+          >
+            <span>{t('tab.subagents')}</span>
+            {counts.workers > 0 && <span className="ag-tab-count">{counts.workers}</span>}
+          </button>
+          <button
+            type="button"
+            role="tab"
             className={`ag-tab ${tab === 'members' ? 'active' : ''}`}
             aria-selected={tab === 'members'}
             data-testid="swarm-tab-members"
@@ -253,7 +273,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
       </header>
 
       <div className="ag-scroll">
-        <div className="ag-main">
+        <div className="ag-main" style={tab === 'subagents' ? { maxWidth: 1120 } : undefined}>
           {actionError && (
             <div className="ag-ov-sys error" role="alert" style={{ marginBottom: 10 }}>
               <span className="ag-ov-sys-dot" aria-hidden="true" />
@@ -326,6 +346,16 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
                   onAction={handleAction}
                   onLoadEarlier={handleLoadEarlier}
                   loadingEarlier={loadingEarlier}
+                  onOpenMembers={() => setTab('members')}
+                  onSelectSubagent={openSubagent}
+                />
+              )}
+              {tab === 'subagents' && (
+                <SubagentsTab
+                  snapshot={snapshot}
+                  initialMember={selectedSubagent}
+                  onAction={handleAction}
+                  onJumpToSeq={handleJumpToSeq}
                 />
               )}
               {tab === 'members' && (
@@ -334,6 +364,7 @@ export function SwarmWorkspace(props: SwarmWorkspaceProps = {}): JSX.Element {
                   onJumpToSeq={handleJumpToSeq}
                   onAction={handleAction}
                   models={models}
+                  onInspectSubagent={openSubagent}
                 />
               )}
               {tab === 'graph' && (

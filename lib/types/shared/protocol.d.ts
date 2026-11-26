@@ -192,6 +192,9 @@ export interface TranscriptStepView {
     title: string;
     detail?: string;
     time?: string;
+    ts?: number;
+    durationMs?: number;
+    toolName?: string;
     status?: 'ok' | 'running' | 'error';
 }
 export interface MemberTranscriptPayload {
@@ -202,6 +205,10 @@ export interface MemberTranscriptPayload {
     workspace_mode: WorkspaceMode;
     workspace: string;
     branch?: string;
+    state?: MemberState;
+    activity?: string;
+    steps_count?: number;
+    failure?: MemberRecord['failure'];
     steps: TranscriptStepView[];
 }
 export interface RawFilesPayload {
@@ -270,6 +277,11 @@ export interface RoleModelPreset {
     label?: string;
 }
 export type RoleModelMap = Record<string, RoleModelPreset>;
+export interface CatalogEffortOption {
+    id: string;
+    name: string;
+    description?: string;
+}
 export interface ConfigPayload extends SwarmConfig {
     waitToolName: string;
     primaryCommand: string;

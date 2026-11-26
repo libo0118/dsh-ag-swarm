@@ -10,6 +10,7 @@ export interface MembersTabProps {
   onJumpToSeq: (seq: number) => void
   onAction: (req: UiActionRequest) => Promise<void>
   models: CatalogModelOption[]
+  onInspectSubagent?: (memberName: string) => void
 }
 
 function shortWorkspace(ws: string): string {
@@ -73,7 +74,7 @@ function matchesQuery(m: MemberRecord, query: string): boolean {
 }
 
 export function MembersTab(props: MembersTabProps): JSX.Element {
-  const { snapshot, onJumpToSeq, onAction, models } = props
+  const { snapshot, onJumpToSeq, onAction, models, onInspectSubagent } = props
   const locale = useUiLocale()
   const isZh = locale === 'zh-CN'
   const [query, setQuery] = useState('')
@@ -187,11 +188,13 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, minHeight: 22 }}
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>@{m.name}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, lineHeight: '20px', whiteSpace: 'nowrap' }}>@{m.name}</span>
               <span
                 className={`ag-mstat ag-mstat-${badge.tone}`}
                 style={{
                   fontSize: 12,
+                  lineHeight: '20px',
+                  padding: '1px 0',
                   fontWeight: badge.tone === 'muted' ? 400 : 500,
                   color: badgeColor,
                   overflow: 'hidden',
@@ -215,6 +218,20 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
               }}
             >
               {modelShort && <span>{modelShort}</span>}
+              {onInspectSubagent && (
+                <button
+                  type="button"
+                  className="ag-ghost-btn"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onInspectSubagent(m.name)
+                  }}
+                  title={isZh ? '打开子代理实时对话视图' : 'Inspect subagent conversation'}
+                  style={{ height: 20, padding: '0 6px', fontSize: 11 }}
+                >
+                  {isZh ? '对话' : 'Trace'}
+                </button>
+              )}
               {m.last_post_seq ? (
                 <button
                   type="button"
