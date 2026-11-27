@@ -165,6 +165,13 @@ export interface SwarmSnapshotPayload {
         text: string;
         time: string;
     } | null;
+    paused?: boolean;
+    monitor?: {
+        enabled: boolean;
+        intervalMs: number;
+        paused: boolean;
+        lastAlertSeq?: number;
+    };
     stats: {
         totalTasks: number;
         doneTasks: number;

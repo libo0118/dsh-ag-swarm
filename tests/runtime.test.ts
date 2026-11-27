@@ -1415,4 +1415,91 @@ describe('/swarm primary command, WorkerPool presets & /api/model-presets routes
     disposeRoutes()
     await pool.dispose()
   })
+
+  it('v0.1.11: pauses swarm on DSH v4 turn/end abort and DSH restart so stall monitor or late worker replies never auto-restart stopped coordinator, surfaces monitor metadata, and skips empty assistant/attempt logs', async () => {
+    const storageDir = makeTempDir('ag-v0111-store-')
+    const cwd = makeTempDir('ag-v0111-cwd-')
+    const ctx = new MockHostContext(cwd)
+    const store = new SwarmStore(storageDir)
+    const config = resolveSwarmConfig({ storageDir, enableWorktrees: false, enableStallMonitor: true, stallCheckIntervalMs: 180_000 })
+    const pool = new WorkerPool(ctx, store, config)
+    const disposeRoutes = registerSwarmRoutes(ctx, store, pool, { config })
+
+    const coord = new MockAgent('coord-v0111', cwd)
+    coord.status = 'running'
+    ctx.agentsMap.set(coord.id, coord)
+    const swarm = pool.ensureSwarmForSession(coord.id, 'Pause On Stop Test', cwd, coord)
+    const [w1] = await pool.addWorkers({
+      swarmId: swarm.swarm_id,
+      callerName: 'coordinator',
+      callerAgent: coord,
+      name: 'w-pause',
+      brief: 'Long run',
+    })
+    const workerAgent = ctx.agentsMap.get(w1.conversation_id)!
+    const wCancelSpy = vi.fn(async () => { workerAgent.status = 'idle' })
+    workerAgent.cancel = wCancelSpy
+    workerAgent.status = 'running'
+    workerAgent.session.events.push(
+      { type: 'assistant/attempt', time: Date.now(), data: { turn: 19, step: 47, stream: [] } },
+      { type: 'assistant/message', time: Date.now(), data: { message: { content: [{ type: 'text', text: 'Real step result' }] } } },
+    )
+
+    // Verify getMemberTranscript skips empty assistant/attempt events
+    const tx = await pool.getMemberTranscript(swarm.swarm_id, 'w-pause')
+    expect(tx.steps.some((s) => (s.detail ?? '').includes('"stream":[]'))).toBe(false)
+    expect(tx.steps.some((s) => s.kind === 'assistant' && s.detail === 'Real step result')).toBe(true)
+
+    // 1) Simulate DSH v4 coordinator stop outside swarm_wait: turn/end { reason: { kind: 'aborted' } } + agent/status idle
+    coord.session.events.push({ type: 'turn/end', time: Date.now(), data: { turn: 2, reason: { kind: 'aborted' } } })
+    ctx.emitStatus(coord, 'idle')
+    await new Promise((r) => setTimeout(r, 15))
+
+    expect(wCancelSpy).toHaveBeenCalledTimes(1)
+    expect(pool.isSwarmPaused(swarm.swarm_id)).toBe(true)
+
+    // Late post from worker targeting @coordinator must record on board but NOT steer stopped coordinator
+    const steerCountBefore = coord.steered.length
+    const latePost = await pool.postMessage(swarm.swarm_id, { agent: 'w-pause', text: '@coordinator late finishing note' })
+    expect(latePost.woken).toEqual([])
+    expect(coord.steered.length).toBe(steerCountBefore)
+
+    // Stall monitor respects paused: true and fires nothing
+    const monitorPosts: string[] = []
+    const mon = new SwarmStallMonitor({
+      config,
+      listSwarmViews: () => {
+        const s = store.getSwarm(swarm.swarm_id)!
+        return [{ swarmId: s.swarm_id, head: s.head, paused: pool.isSwarmPaused(s.swarm_id), members: s.members, channels: s.channels, messages: s.messages }]
+      },
+      postStallAlert: async (_id, text) => { monitorPosts.push(text) },
+    })
+    const fired = await mon.tick()
+    expect(fired).toEqual([])
+    expect(monitorPosts).toEqual([])
+
+    // API snapshot surfaces paused + monitor metadata
+    const snapRes = createMockRes()
+    await ctx.routeHandler!(createMockReq('GET', `/ag-swarm/api/swarm?swarmId=${swarm.swarm_id}`), snapRes.res)
+    const snapJson = JSON.parse(snapRes.chunks.join('')) as { paused?: boolean; monitor?: { enabled: boolean; intervalMs: number; paused: boolean } }
+    expect(snapJson.paused).toBe(true)
+    expect(snapJson.monitor).toEqual({ enabled: true, intervalMs: 180_000, paused: true })
+
+    // 2) User resumes coordinator chat -> agent/status running unpauses swarm
+    ctx.emitStatus(coord, 'running')
+    expect(pool.isSwarmPaused(swarm.swarm_id)).toBe(false)
+    const resumedPost = await pool.postMessage(swarm.swarm_id, { agent: 'w-pause', text: '@coordinator resumed progress' })
+    expect(resumedPost.woken).toContain('coordinator')
+    expect(coord.steered.length).toBe(steerCountBefore + 1)
+
+    disposeRoutes()
+    await pool.dispose()
+
+    // 3) Restart reconciliation marks historical inactive swarms paused by default
+    const storeRestart = new SwarmStore(storageDir)
+    const ctxRestart = new MockHostContext(cwd)
+    const poolRestart = new WorkerPool(ctxRestart, storeRestart, config)
+    expect(poolRestart.isSwarmPaused(swarm.swarm_id)).toBe(true)
+    await poolRestart.dispose()
+  })
 })

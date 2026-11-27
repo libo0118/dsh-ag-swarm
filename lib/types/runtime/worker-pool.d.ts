@@ -66,11 +66,15 @@ export declare class WorkerPool {
     private readonly liveHandles;
     private readonly sessionIndex;
     private readonly pendingWakeups;
+    private readonly pausedSwarms;
     private readonly eventDisposers;
     private readonly lifetime;
     private readonly modelPresets;
     private disposed;
     constructor(ctx: PluginContextLike, store: SwarmStore, config: SwarmConfig);
+    isSwarmPaused(swarmId: string): boolean;
+    pauseSwarm(swarmId: string): void;
+    resumeSwarm(swarmId: string): void;
     getModelPresets(): RoleModelMap;
     setModelPresets(next: unknown): RoleModelMap;
     getModelCatalogWithPresets(): Promise<{

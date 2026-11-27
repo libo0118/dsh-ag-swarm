@@ -2,6 +2,7 @@ import type { BoardMessage, ChannelMeta, MemberRecord, SwarmConfig } from '../sh
 export interface MonitorSwarmView {
     swarmId: string;
     head: number;
+    paused?: boolean;
     members: Record<string, MemberRecord>;
     channels: Record<string, ChannelMeta>;
     messages: BoardMessage[];

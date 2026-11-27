@@ -187,6 +187,7 @@ export class WorkerPool {
   private readonly liveHandles = new Map<string, LiveWorkerHandle>()
   private readonly sessionIndex = new Map<string, { swarmId: string; memberName: string }>()
   private readonly pendingWakeups = new Map<string, PendingWakeup[]>()
+  private readonly pausedSwarms = new Set<string>()
   private readonly eventDisposers: Array<() => void> = []
   private readonly lifetime = new AbortController()
   private readonly modelPresets: ModelPresetStore
@@ -201,6 +202,26 @@ export class WorkerPool {
     this.rebuildSessionIndex()
     this.reconcileStaleStateOnStartup()
     this.installHostListeners()
+  }
+
+  isSwarmPaused(swarmId: string): boolean {
+    return this.pausedSwarms.has(swarmId)
+  }
+
+  pauseSwarm(swarmId: string): void {
+    this.pausedSwarms.add(swarmId)
+    const swarm = this.store.getSwarm(swarmId)
+    if (!swarm) return
+    this.pendingWakeups.delete(swarm.session_id)
+    for (const member of Object.values(swarm.members)) {
+      if (member.conversation_id) {
+        this.pendingWakeups.delete(member.conversation_id)
+      }
+    }
+  }
+
+  resumeSwarm(swarmId: string): void {
+    this.pausedSwarms.delete(swarmId)
   }
 
   getModelPresets(): RoleModelMap {
@@ -236,6 +257,10 @@ export class WorkerPool {
     for (const summary of this.store.listSwarms()) {
       const state = this.store.getSwarm(summary.swarm_id)
       if (!state) continue
+      const coordLive = typeof agents?.get === 'function' ? agents.get(state.session_id) : undefined
+      if (!coordLive || coordLive.status !== 'running') {
+        this.pausedSwarms.add(state.swarm_id)
+      }
       for (const member of Object.values(state.members)) {
         if (isKilled(member)) continue
         const patch: Partial<MemberRecord> = {}
@@ -311,6 +336,7 @@ export class WorkerPool {
   }
 
   async cancelActiveWorkers(swarmId: string, reason = 'coordinator_stopped'): Promise<string[]> {
+    this.pauseSwarm(swarmId)
     const swarm = this.store.getSwarm(swarmId)
     if (!swarm) return []
     const agents = this.ctx.get<HostAgentsLike>('agents')
@@ -372,6 +398,9 @@ export class WorkerPool {
       if (!member || isKilled(member)) return
 
       if (payload.status === 'running') {
+        if (ref.memberName === 'coordinator') {
+          this.resumeSwarm(ref.swarmId)
+        }
         this.store.updateMember(ref.swarmId, ref.memberName, {
           state: 'working',
           activity: member.activity || 'Working',
@@ -387,17 +416,36 @@ export class WorkerPool {
           })
         }
         if (ref.memberName === 'coordinator') {
+          const rKind = payload.reason?.kind
           let cancelled =
             payload.stopReason === 'cancelled' ||
             payload.stopReason === 'aborted' ||
-            payload.reason?.kind === 'user'
+            rKind === 'user' ||
+            rKind === 'aborted' ||
+            rKind === 'interrupted'
           if (!cancelled) {
             try {
               const snapFn = (payload.agent?.session as { snapshotEvents?: (from?: number) => unknown[] } | undefined)?.snapshotEvents
               const events = typeof snapFn === 'function' ? snapFn() : undefined
               if (Array.isArray(events)) {
-                const tail = events.slice(-3) as Array<{ type?: string; data?: { stopReason?: string; cancelled?: boolean } }>
-                cancelled = tail.some((e) => e?.data?.stopReason === 'cancelled' || e?.data?.stopReason === 'aborted' || e?.data?.cancelled === true)
+                for (let i = events.length - 1; i >= 0; i--) {
+                  const ev = events[i] as {
+                    type?: string
+                    data?: { stopReason?: string; cancelled?: boolean; reason?: { kind?: string } }
+                  } | undefined
+                  if (!ev) continue
+                  if (ev.type === 'turn/end') {
+                    const turnReasonKind = ev.data?.reason?.kind
+                    cancelled =
+                      turnReasonKind === 'aborted' ||
+                      turnReasonKind === 'interrupted' ||
+                      ev.data?.stopReason === 'cancelled' ||
+                      ev.data?.stopReason === 'aborted' ||
+                      ev.data?.cancelled === true
+                    break
+                  }
+                  if (ev.type === 'turn/start') break
+                }
               }
             } catch { /* ignore */ }
           }
@@ -648,6 +696,7 @@ export class WorkerPool {
     if (!caller || isKilled(caller)) {
       throw new Error(`Caller "${input.callerName}" is not an active member of swarm ${input.swarmId}`)
     }
+    this.resumeSwarm(input.swarmId)
 
     const nextDepth = (caller.depth ?? 0) + 1
     if (nextDepth > this.config.maxDepth) {
@@ -981,8 +1030,14 @@ export class WorkerPool {
   ): Promise<{ message: BoardMessage; woken: string[] }> {
     const swarm = this.store.getSwarm(swarmId)
     if (!swarm) throw new Error(`Swarm not found: ${swarmId}`)
+    if (input.agent === 'coordinator') {
+      this.resumeSwarm(swarmId)
+    }
     const message = this.store.appendMessage(swarmId, input)
     if (isControlMessage(message)) {
+      return { message, woken: [] }
+    }
+    if (this.pausedSwarms.has(swarmId)) {
       return { message, woken: [] }
     }
 
@@ -1007,7 +1062,7 @@ export class WorkerPool {
   }
 
   private async deliverDoorbell(swarm: SwarmState, member: MemberRecord, item: PendingWakeup): Promise<void> {
-    if (isKilled(member)) return
+    if (isKilled(member) || this.pausedSwarms.has(swarm.swarm_id)) return
     const convId = member.conversation_id
     if (member.state === 'working' && member.role !== 'coordinator') {
       const queue = this.pendingWakeups.get(convId) ?? []
@@ -1019,6 +1074,7 @@ export class WorkerPool {
   }
 
   private async flushPendingWakeups(swarmId: string, memberName: string): Promise<void> {
+    if (this.pausedSwarms.has(swarmId)) return
     const swarm = this.store.getSwarm(swarmId)
     const member = swarm?.members[memberName]
     if (!swarm || !member || isKilled(member)) return
@@ -1195,6 +1251,7 @@ export class WorkerPool {
       void this.cancelActiveWorkers(input.swarmId, 'coordinator_aborted')
       throw formatAbortError(input.signal.reason, 'swarm_wait aborted')
     }
+    this.resumeSwarm(input.swarmId)
     if (this.lifetime.signal.aborted) {
       throw formatAbortError(this.lifetime.signal.reason, 'dsh-ag-swarm plugin unloaded')
     }
@@ -1439,6 +1496,7 @@ export class WorkerPool {
     memberName: string,
     text?: string,
   ): Promise<{ message: BoardMessage; woken: string[] }> {
+    this.resumeSwarm(swarmId)
     const body = text && text.trim().length > 0
       ? text.trim()
       : 'Status check: please report your current progress or continue your assigned work.'
@@ -1682,9 +1740,11 @@ export class WorkerPool {
               if (txt) pushStep({ kind: 'assistant', title: 'Assistant response', detail: txt.slice(0, 4000), time, ts, durationMs: stepDuration, status: 'ok' })
             }
           }
-        } else {
+        } else if (type === 'assistant/message') {
           const detail = extractEventText(data, 4000)
           if (detail) pushStep({ kind: 'assistant', title: 'Assistant response', detail, time, ts, durationMs: stepDuration, status: 'ok' })
+        } else if (typeof data.text === 'string' && data.text.trim()) {
+          pushStep({ kind: 'assistant', title: 'Assistant response', detail: data.text.slice(0, 4000), time, ts, durationMs: stepDuration, status: 'ok' })
         }
       } else if (type === 'tool/call' || type === 'tool/result' || type === 'tool/ptc-dispatch') {
         const toolName = String(data.name ?? data.toolName ?? 'tool')
@@ -1750,6 +1810,7 @@ export class WorkerPool {
     goal: string,
     attachments?: readonly unknown[],
   ): Promise<{ dispatched: boolean; method?: 'followup' | 'steer' }> {
+    this.resumeSwarm(swarmId)
     const swarm = this.store.getSwarm(swarmId)
     if (!swarm) return { dispatched: false }
     if (agent) this.syncCoordinatorFromAgent(swarmId, agent)

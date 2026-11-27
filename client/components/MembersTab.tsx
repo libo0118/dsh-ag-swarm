@@ -83,10 +83,11 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
 
   const normalizedQuery = query.trim().toLowerCase()
 
-  const { coordinator, activeWorkers, standbyWorkers, retiredWorkers } = useMemo(() => {
+  const { coordinator, hasExplicitMonitor, activeWorkers, standbyWorkers, retiredWorkers } = useMemo(() => {
     const all = Object.values(snapshot.members || {})
     const coord = all.find((m) => m.role === 'coordinator' || m.name === 'coordinator') ?? null
-    const workers = all.filter((m) => m !== coord && m.role !== 'monitor')
+    const explicitMonitor = all.some((m) => m.role === 'monitor' || m.name === 'monitor')
+    const workers = all.filter((m) => m !== coord)
 
     const live = workers.filter((m) => !m.killed && m.state !== 'killed')
     const retired = workers
@@ -108,6 +109,7 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
 
     return {
       coordinator: coord && matchesQuery(coord, normalizedQuery) ? coord : null,
+      hasExplicitMonitor: explicitMonitor,
       activeWorkers: active.filter((m) => matchesQuery(m, normalizedQuery)),
       standbyWorkers: standby.filter((m) => matchesQuery(m, normalizedQuery)),
       retiredWorkers: retired.filter((m) => matchesQuery(m, normalizedQuery)),
@@ -399,7 +401,90 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
     )
   }
 
-  const hasAnyVisible = Boolean(coordinator) || activeWorkers.length > 0 || standbyWorkers.length > 0 || retiredWorkers.length > 0
+  const monitorInfo = snapshot.monitor
+  const showBuiltinMonitor = Boolean(
+    !hasExplicitMonitor &&
+    monitorInfo &&
+    (!normalizedQuery || 'monitor 巡检 监控 stall paused'.includes(normalizedQuery)),
+  )
+  const hasAnyVisible = Boolean(coordinator) || showBuiltinMonitor || activeWorkers.length > 0 || standbyWorkers.length > 0 || retiredWorkers.length > 0
+
+  const renderBuiltinMonitor = (): JSX.Element | null => {
+    if (!showBuiltinMonitor || !monitorInfo) return null
+    const intervalMin = Math.max(1, Math.round(monitorInfo.intervalMs / 60_000))
+    const intervalLabel = monitorInfo.intervalMs >= 60_000
+      ? (isZh ? `每 ${intervalMin} 分钟` : `every ${intervalMin}m`)
+      : (isZh ? `每 ${Math.max(1, Math.round(monitorInfo.intervalMs / 1000))} 秒` : `every ${Math.max(1, Math.round(monitorInfo.intervalMs / 1000))}s`)
+    const statusLabel = !monitorInfo.enabled
+      ? (isZh ? '已关闭' : 'Disabled')
+      : monitorInfo.paused
+        ? (isZh ? '已随停止暂停' : 'Paused')
+        : (isZh ? `巡检中 · ${intervalLabel}` : `Active · ${intervalLabel}`)
+    const statusColor = !monitorInfo.enabled
+      ? 'var(--ag-fg-muted, #5d676f)'
+      : monitorInfo.paused
+        ? 'var(--ag-warning, #bca136)'
+        : 'var(--ag-primary, #007acc)'
+    const beeState = monitorInfo.enabled && !monitorInfo.paused ? 'waiting' : 'stopped'
+
+    return (
+      <article
+        className="ag-mrow"
+        data-testid="swarm-builtin-monitor"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '50px minmax(0, 1fr)',
+          columnGap: 12,
+          padding: 10,
+          margin: '2px -10px 0',
+          borderRadius: 10,
+        }}
+      >
+        <span
+          className="ag-mav"
+          style={{
+            position: 'relative',
+            width: 50,
+            height: 44,
+            borderRadius: 10,
+            display: 'grid',
+            placeItems: 'center',
+            background: getBeeTileBg('monitor', 'monitor'),
+            boxShadow: 'inset 0 0 0 1px var(--ag-border, rgba(128,128,128,0.2))',
+            flex: 'none',
+          }}
+        >
+          <PixelBee name="monitor" role="monitor" state={beeState} size={2} />
+        </span>
+        <div className="ag-mcol" style={{ minWidth: 0 }}>
+          <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, minHeight: 22 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, lineHeight: '20px', whiteSpace: 'nowrap' }}>@monitor</span>
+              <span style={{ fontSize: 12, lineHeight: '20px', fontWeight: 500, color: statusColor, whiteSpace: 'nowrap' }}>
+                {statusLabel}
+              </span>
+            </span>
+            {monitorInfo.lastAlertSeq ? (
+              <button
+                type="button"
+                className="ag-ghost-btn"
+                onClick={() => onJumpToSeq(monitorInfo.lastAlertSeq!)}
+                title={isZh ? `跳转到最近巡检提醒 #${monitorInfo.lastAlertSeq}` : `Jump to last alert #${monitorInfo.lastAlertSeq}`}
+                style={{ height: 20, padding: '0 4px', fontFamily: 'var(--ag-mono, monospace)', fontSize: 11 }}
+              >
+                #{monitorInfo.lastAlertSeq}
+              </button>
+            ) : null}
+          </header>
+          <div style={{ fontSize: 12, color: 'var(--ag-fg-muted, #5d676f)', marginTop: 2 }}>
+            {isZh
+              ? '内置零 Token 定时巡检器（非独立模型子代理）；主对话停止后自动暂停，防止误唤醒。'
+              : 'Built-in zero-token timer watchdog (not an LLM subagent); auto-pauses when coordinator stops.'}
+          </div>
+        </div>
+      </article>
+    )
+  }
 
   return (
     <div className="ag-members" data-testid="swarm-members-tab">
@@ -419,7 +504,7 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
         </label>
       </div>
 
-      {coordinator && (
+      {(coordinator || showBuiltinMonitor) && (
         <section
           className="ag-mgroup ag-mcoord"
           style={{
@@ -428,7 +513,8 @@ export function MembersTab(props: MembersTabProps): JSX.Element {
             borderBottom: '1px solid var(--ag-border, rgba(128,128,128,0.16))',
           }}
         >
-          {renderCard(coordinator)}
+          {coordinator && renderCard(coordinator)}
+          {renderBuiltinMonitor()}
         </section>
       )}
 

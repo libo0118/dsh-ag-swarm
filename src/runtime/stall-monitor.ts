@@ -3,6 +3,7 @@ import type { BoardMessage, ChannelMeta, MemberRecord, SwarmConfig } from '../sh
 export interface MonitorSwarmView {
   swarmId: string
   head: number
+  paused?: boolean
   members: Record<string, MemberRecord>
   channels: Record<string, ChannelMeta>
   messages: BoardMessage[]
@@ -74,6 +75,7 @@ export function diagnoseStall(
   view: MonitorSwarmView,
   pingedMentions: ReadonlySet<string>,
 ): StallDiagnosis | null {
+  if (view.paused) return null
   const nonMonitor = Object.values(view.members).filter((m) => m.role !== 'monitor' && !m.killed)
   if (nonMonitor.length === 0) return null
   const workers = nonMonitor.filter((m) => m.role !== 'coordinator')
@@ -217,6 +219,13 @@ export class SwarmStallMonitor {
         dormant: false,
       }
       this.tracks.set(view.swarmId, track)
+    }
+
+    if (view.paused) {
+      track.lastSignature = null
+      track.alertCount = 0
+      track.ticksSinceAlert = MIN_TICKS_BETWEEN_REPEAT
+      return null
     }
 
     const done = isCoordinatorDone(view.messages)

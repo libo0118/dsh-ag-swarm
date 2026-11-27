@@ -108,7 +108,9 @@
   padding: 12px var(--ag-inline) 0;
   display: flex; flex-direction: column; gap: 2px;
 }
-.ag-header-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ag-header-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ag-header-row .ag-ghost-btn,
+.ag-header-row .ag-icon-btn { flex: none; white-space: nowrap; }
 .ag-swarm-title {
   flex: 1 1 auto; min-width: 0; margin: 0;
   font-size: var(--ag-text-base); font-weight: 600; line-height: 22px;
@@ -116,7 +118,7 @@
 }
 .ag-swarm-select {
   appearance: none; -webkit-appearance: none;
-  max-width: 220px; height: 26px; padding: 0 22px 0 8px;
+  flex: 0 1 180px; min-width: 0; max-width: 180px; height: 26px; padding: 0 22px 0 8px;
   border: 1px solid var(--ag-border); border-radius: var(--ag-r-md);
   background: var(--ag-field); color: var(--ag-fg);
   font-size: var(--ag-text-xs); cursor: pointer;

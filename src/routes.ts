@@ -518,6 +518,17 @@ export function registerSwarmRoutes(
             since: parseQueryInt(url.searchParams.get('since')),
             knownMembers: parseQueryInt(url.searchParams.get('knownMembers')),
           })
+          if (!snapshot.unchanged) {
+            const paused = pool.isSwarmPaused(swarm.swarm_id)
+            const lastMonitorPost = [...swarm.messages].reverse().find((m) => m.agent === 'monitor' && m.kind !== 'control')
+            snapshot.paused = paused
+            snapshot.monitor = {
+              enabled: resolvedConfig.enableStallMonitor,
+              intervalMs: resolvedConfig.stallCheckIntervalMs,
+              paused,
+              ...(lastMonitorPost ? { lastAlertSeq: lastMonitorPost.seq } : {}),
+            }
+          }
           sendJson(res, 200, snapshot)
           return
         }

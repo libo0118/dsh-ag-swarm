@@ -103,6 +103,7 @@ export function apply(ctx: Context, rawConfig?: Partial<SwarmConfig>): void {
             {
               swarmId: state.swarm_id,
               head: state.head,
+              paused: pool.isSwarmPaused(state.swarm_id),
               members: state.members,
               channels: state.channels,
               messages: state.messages,

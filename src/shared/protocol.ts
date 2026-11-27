@@ -164,6 +164,13 @@ export interface SwarmSnapshotPayload {
   frames: ScreenshotFrame[]
   systemAttention: AttentionItem[]
   stallBanner: { seq: number; agent: string; text: string; time: string } | null
+  paused?: boolean
+  monitor?: {
+    enabled: boolean
+    intervalMs: number
+    paused: boolean
+    lastAlertSeq?: number
+  }
   stats: {
     totalTasks: number
     doneTasks: number
